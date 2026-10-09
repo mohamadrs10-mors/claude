@@ -26,9 +26,9 @@ class _TransactionsPageState extends State<TransactionsPage> {
         {for (final k in await repo.categories()) k.id: k.name},
       ),
       builder: (c, d) => Scaffold(
-        body: Column(children: [
+        body: Constrained(child: Column(children: [
           Padding(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.all(16),
             child: DropdownButtonFormField<String?>(
               initialValue: accountId,
               decoration: const InputDecoration(labelText: 'فیلتر حساب', border: OutlineInputBorder()),
@@ -43,9 +43,9 @@ class _TransactionsPageState extends State<TransactionsPage> {
             child: d.txs.isEmpty
                 ? emptyState('تراکنشی ثبت نشده است.')
                 : ListView.separated(
-                    padding: const EdgeInsets.only(bottom: 88),
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 96),
                     itemCount: d.txs.length,
-                    separatorBuilder: (_, _) => const Divider(height: 1),
+                    separatorBuilder: (_, _) => const SizedBox(height: 8),
                     itemBuilder: (c, i) {
                       final t = d.txs[i];
                       final isIn = t.kind == 'receipt';
@@ -56,17 +56,21 @@ class _TransactionsPageState extends State<TransactionsPage> {
                         if (t.categoryId != null) d.cats[t.categoryId] ?? '',
                         if (t.description.isNotEmpty) t.description,
                       ].join(' • ');
-                      return ListTile(
-                        leading: Icon(isIn ? Icons.south_west : Icons.north_east,
-                            color: isIn ? Colors.green : Colors.redAccent),
-                        title: Text('${isIn ? 'دریافت' : 'پرداخت'}  ${money(t.amount)} تومان'),
-                        subtitle: Text(sub),
-                        onTap: () => editTx(c, repo, tx: t),
+                      return Card(
+                        child: ListTile(
+                          leading: CircleAvatar(
+                            backgroundColor: (isIn ? Colors.green : Colors.redAccent).withValues(alpha: 0.14),
+                            child: Icon(isIn ? Icons.south_west : Icons.north_east, color: isIn ? Colors.green : Colors.redAccent),
+                          ),
+                          title: Text('${isIn ? 'دریافت' : 'پرداخت'}  ${moneyC(t.amount)}', style: const TextStyle(fontWeight: FontWeight.w600)),
+                          subtitle: Text(sub),
+                          onTap: () => editTx(c, repo, tx: t),
+                        ),
                       );
                     },
                   ),
           ),
-        ]),
+        ])),
         floatingActionButton: FloatingActionButton.extended(
           onPressed: () => editTx(c, repo),
           icon: const Icon(Icons.add),

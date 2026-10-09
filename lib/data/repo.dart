@@ -1,5 +1,9 @@
-import 'package:flutter/foundation.dart';
+import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+import 'package:shamsi_date/shamsi_date.dart';
+
+import '../util/format.dart';
 import 'db.dart';
 
 class Account {
@@ -21,6 +25,25 @@ class Category {
   final String id, name, kind; // kind: income | expense
 }
 
+class Product {
+  Product({
+    required this.id,
+    required this.name,
+    this.code = '',
+    this.unit = 'عدد',
+    this.salePrice = 0,
+    this.buyPrice = 0,
+    this.openingStock = 0,
+    this.minStock = 0,
+    this.note = '',
+    this.stock = 0,
+  });
+  final String id, name, code, unit, note;
+  final int salePrice, buyPrice;
+  final double openingStock, minStock, stock;
+  bool get low => minStock > 0 && stock <= minStock;
+}
+
 class Tx {
   Tx(this.id, this.date, this.kind, this.amount, this.accountId, this.partyId,
       this.categoryId, this.invoiceId, this.description);
@@ -31,21 +54,70 @@ class Tx {
   final String description;
 }
 
+class Cheque {
+  Cheque({
+    required this.id,
+    required this.kind,
+    required this.number,
+    required this.bank,
+    required this.amount,
+    required this.dueDate,
+    this.partyId,
+    this.status = 'pending',
+    this.accountId,
+    this.txId,
+    this.note = '',
+  });
+  final String id, kind, number, bank, dueDate, status, note; // kind: received | issued
+  final int amount;
+  final String? partyId, accountId, txId;
+}
+
 class InvoiceItem {
-  InvoiceItem(this.title, this.qty, this.unitPrice);
+  InvoiceItem(this.title, this.qty, this.unitPrice, {this.productId});
   final String title;
   final double qty;
   final int unitPrice;
+  final String? productId;
   int get total => (qty * unitPrice).round();
 }
 
+/// The four kinds of invoice and how each one affects the party balance and
+/// the stock.
+class InvoiceKind {
+  const InvoiceKind(this.code, this.label, this.partyOwesUs, this.stockIn, this.paymentKind, this.partyLabel);
+  final String code, label, partyLabel;
+
+  /// true: the invoice total increases what the party owes us.
+  final bool partyOwesUs;
+
+  /// true: goods come in (purchase, sale return), false: goods go out.
+  final bool stockIn;
+
+  /// Kind of transaction that settles it: receipt or payment.
+  final String paymentKind;
+}
+
+const invoiceKinds = [
+  InvoiceKind('sale', 'فاکتور فروش', true, false, 'receipt', 'مشتری'),
+  InvoiceKind('purchase', 'فاکتور خرید', false, true, 'payment', 'تأمین‌کننده'),
+  InvoiceKind('sale_return', 'برگشت از فروش', false, true, 'payment', 'مشتری'),
+  InvoiceKind('purchase_return', 'برگشت از خرید', true, false, 'receipt', 'تأمین‌کننده'),
+];
+
+InvoiceKind invoiceKind(String code) =>
+    invoiceKinds.firstWhere((k) => k.code == code, orElse: () => invoiceKinds.first);
+
 class Invoice {
   Invoice(this.id, this.number, this.kind, this.date, this.partyId, this.discount,
-      this.note, this.subtotal, this.paid);
-  final String id, kind, date, partyId, note; // kind: sale | purchase
-  final int number, discount, subtotal, paid;
-  int get total => subtotal - discount;
+      this.note, this.subtotal, this.paid, this.taxPercent);
+  final String id, kind, date, partyId, note;
+  final int number, discount, subtotal, paid, taxPercent;
+  int get net => subtotal - discount;
+  int get tax => (net * taxPercent / 100).round();
+  int get total => net + tax;
   int get remaining => total - paid;
+  InvoiceKind get info => invoiceKind(kind);
 }
 
 class MonthReport {
@@ -57,13 +129,64 @@ class MonthReport {
   int get net => income - expense;
 }
 
+class ProductSales {
+  ProductSales(this.name, this.unit, this.qty, this.revenue);
+  final String name, unit;
+  final double qty;
+  final int revenue;
+}
+
+class Dashboard {
+  Dashboard({
+    required this.totalBalance,
+    required this.monthIncome,
+    required this.monthExpense,
+    required this.receivable,
+    required this.payable,
+    required this.months,
+    required this.lowStock,
+    required this.dueCheques,
+    required this.recent,
+    required this.names,
+  });
+  final int totalBalance, monthIncome, monthExpense, receivable, payable;
+
+  /// Last six Jalali months, oldest first: (label, income, expense).
+  final List<(String, int, int)> months;
+  final List<Product> lowStock;
+  final List<Cheque> dueCheques;
+  final List<Tx> recent;
+  final Map<String, String> names; // party/account id -> name
+}
+
 /// All accounting queries and mutations. UI listens to it and rebuilds when the
 /// data changes (including changes that arrive from a sync).
 class Repo extends ChangeNotifier {
   Repo(this.store);
   final AppDb store;
 
-  void changed() => notifyListeners();
+  Map<String, String> settings = {};
+
+  /// Loads synced settings (business info, VAT, currency). Call once at start.
+  Future<void> init() => _loadSettings();
+
+  Future<void> _loadSettings() async {
+    final rows = await store.db.query('settings', where: 'deleted=0');
+    settings = {for (final r in rows) r['id'] as String: r['value'] as String};
+    currencyLabel = settings['currency'] ?? 'تومان';
+  }
+
+  String setting(String key, [String def = '']) => settings[key] ?? def;
+
+  Future<void> setSetting(String key, String value) async {
+    await store.save('settings', {'id': key, 'value': value});
+    await _loadSettings();
+    notifyListeners();
+  }
+
+  void changed() {
+    _loadSettings().whenComplete(notifyListeners);
+  }
 
   // ---- accounts -----------------------------------------------------------
 
@@ -96,14 +219,21 @@ class Repo extends ChangeNotifier {
 
   // ---- parties ------------------------------------------------------------
 
+  static const _invoiceTotals = '''
+    WITH inv AS (
+      SELECT i.party_id, i.kind, i.discount, i.tax_percent,
+        COALESCE((SELECT SUM(ROUND(it.qty*it.unit_price)) FROM invoice_items it
+          WHERE it.invoice_id=i.id AND it.deleted=0),0) AS sub
+      FROM invoices i WHERE i.deleted=0),
+    tot AS (
+      SELECT party_id, kind, (sub-discount) + ROUND((sub-discount)*tax_percent/100.0) AS total FROM inv)''';
+
   Future<List<Party>> parties() async {
     final rows = await store.db.rawQuery('''
+      $_invoiceTotals
       SELECT p.id, p.name, p.phone, p.note,
-        COALESCE((SELECT SUM(
-            (SELECT COALESCE(SUM(ROUND(it.qty*it.unit_price)),0) FROM invoice_items it
-               WHERE it.invoice_id=i.id AND it.deleted=0) - i.discount)
-            * CASE i.kind WHEN 'sale' THEN 1 ELSE -1 END
-          FROM invoices i WHERE i.party_id=p.id AND i.deleted=0),0)
+        COALESCE((SELECT SUM(total * CASE WHEN kind IN ('sale','purchase_return') THEN 1 ELSE -1 END)
+          FROM tot WHERE tot.party_id=p.id),0)
         + COALESCE((SELECT SUM(CASE t.kind WHEN 'payment' THEN t.amount ELSE -t.amount END)
           FROM transactions t WHERE t.party_id=p.id AND t.deleted=0),0) AS balance
       FROM parties p WHERE p.deleted=0 ORDER BY p.name''');
@@ -120,8 +250,10 @@ class Repo extends ChangeNotifier {
   }
 
   Future<String?> deleteParty(String id) async {
-    final n = await _count('transactions', 'party_id', id) + await _count('invoices', 'party_id', id);
-    if (n > 0) return 'این شخص دارای تراکنش یا فاکتور است و قابل حذف نیست.';
+    final n = await _count('transactions', 'party_id', id) +
+        await _count('invoices', 'party_id', id) +
+        await _count('cheques', 'party_id', id);
+    if (n > 0) return 'این شخص دارای تراکنش، فاکتور یا چک است و قابل حذف نیست.';
     await store.softDelete('parties', id);
     changed();
     return null;
@@ -151,6 +283,56 @@ class Repo extends ChangeNotifier {
     return null;
   }
 
+  // ---- products -----------------------------------------------------------
+
+  Future<List<Product>> products() async {
+    final rows = await store.db.rawQuery('''
+      SELECT p.*, p.opening_stock + COALESCE((
+        SELECT SUM(it.qty * CASE WHEN i.kind IN ('purchase','sale_return') THEN 1 ELSE -1 END)
+        FROM invoice_items it JOIN invoices i ON i.id=it.invoice_id
+        WHERE it.product_id=p.id AND it.deleted=0 AND i.deleted=0),0) AS stock
+      FROM products p WHERE p.deleted=0 ORDER BY p.name''');
+    return [
+      for (final r in rows)
+        Product(
+          id: r['id'] as String,
+          name: r['name'] as String,
+          code: r['code'] as String,
+          unit: r['unit'] as String,
+          salePrice: r['sale_price'] as int,
+          buyPrice: r['buy_price'] as int,
+          openingStock: (r['opening_stock'] as num).toDouble(),
+          minStock: (r['min_stock'] as num).toDouble(),
+          note: r['note'] as String,
+          stock: (r['stock'] as num).toDouble(),
+        )
+    ];
+  }
+
+  Future<void> saveProduct({
+    String? id,
+    required String name,
+    String code = '',
+    String unit = 'عدد',
+    int salePrice = 0,
+    int buyPrice = 0,
+    double openingStock = 0,
+    double minStock = 0,
+    String note = '',
+  }) async {
+    await store.save('products', {
+      'id': ?id,
+      'name': name, 'code': code, 'unit': unit, 'sale_price': salePrice, 'buy_price': buyPrice,
+      'opening_stock': openingStock, 'min_stock': minStock, 'note': note,
+    });
+    changed();
+  }
+
+  Future<void> deleteProduct(String id) async {
+    await store.softDelete('products', id);
+    changed();
+  }
+
   // ---- transactions -------------------------------------------------------
 
   Future<List<Tx>> transactions({String? accountId, String? partyId, String? from, String? toExclusive, int? limit}) async {
@@ -170,7 +352,7 @@ class Repo extends ChangeNotifier {
     ];
   }
 
-  Future<void> saveTx({
+  Future<String> saveTx({
     String? id,
     required String date,
     required String kind,
@@ -181,13 +363,15 @@ class Repo extends ChangeNotifier {
     String? invoiceId,
     String description = '',
   }) async {
+    final txId = id ?? AppDb.newId();
     await store.save('transactions', {
-      'id': ?id,
+      'id': txId,
       'date': date, 'kind': kind, 'amount': amount, 'account_id': accountId,
       'party_id': partyId, 'category_id': categoryId, 'invoice_id': invoiceId,
       'description': description,
     });
     changed();
+    return txId;
   }
 
   Future<void> deleteTx(String id) async {
@@ -210,7 +394,7 @@ class Repo extends ChangeNotifier {
       for (final r in rows)
         Invoice(r['id'] as String, r['number'] as int, r['kind'] as String, r['date'] as String,
             r['party_id'] as String, r['discount'] as int, r['note'] as String,
-            (r['subtotal'] as num).round(), (r['paid'] as num).round())
+            (r['subtotal'] as num).round(), (r['paid'] as num).round(), r['tax_percent'] as int)
     ];
   }
 
@@ -219,7 +403,8 @@ class Repo extends ChangeNotifier {
         where: 'invoice_id=? AND deleted=0', whereArgs: [invoiceId], orderBy: 'position');
     return [
       for (final r in rows)
-        InvoiceItem(r['title'] as String, (r['qty'] as num).toDouble(), r['unit_price'] as int)
+        InvoiceItem(r['title'] as String, (r['qty'] as num).toDouble(), r['unit_price'] as int,
+            productId: r['product_id'] as String?)
     ];
   }
 
@@ -236,6 +421,7 @@ class Repo extends ChangeNotifier {
     required String date,
     required String partyId,
     required int discount,
+    int taxPercent = 0,
     required String note,
     required List<InvoiceItem> items,
   }) async {
@@ -243,7 +429,7 @@ class Repo extends ChangeNotifier {
     await store.db.transaction((tx) async {
       await store.save('invoices', {
         'id': invId, 'number': number, 'kind': kind, 'date': date,
-        'party_id': partyId, 'discount': discount, 'note': note,
+        'party_id': partyId, 'discount': discount, 'tax_percent': taxPercent, 'note': note,
       }, exec: tx);
       final old = await tx.query('invoice_items',
           columns: ['id'], where: 'invoice_id=? AND deleted=0', whereArgs: [invId]);
@@ -253,7 +439,7 @@ class Repo extends ChangeNotifier {
       for (var i = 0; i < items.length; i++) {
         await store.save('invoice_items', {
           'invoice_id': invId, 'title': items[i].title, 'qty': items[i].qty,
-          'unit_price': items[i].unitPrice, 'position': i,
+          'unit_price': items[i].unitPrice, 'position': i, 'product_id': items[i].productId,
         }, exec: tx);
       }
     });
@@ -279,6 +465,83 @@ class Repo extends ChangeNotifier {
     changed();
   }
 
+  // ---- cheques ------------------------------------------------------------
+
+  Future<List<Cheque>> cheques({String? kind, String? status}) async {
+    final where = <String>['deleted=0'];
+    final args = <Object?>[];
+    if (kind != null) { where.add('kind=?'); args.add(kind); }
+    if (status != null) { where.add('status=?'); args.add(status); }
+    final rows = await store.db.query('cheques',
+        where: where.join(' AND '), whereArgs: args, orderBy: 'due_date');
+    return [
+      for (final r in rows)
+        Cheque(
+          id: r['id'] as String, kind: r['kind'] as String, number: r['number'] as String,
+          bank: r['bank'] as String, amount: r['amount'] as int, dueDate: r['due_date'] as String,
+          partyId: r['party_id'] as String?, status: r['status'] as String,
+          accountId: r['account_id'] as String?, txId: r['tx_id'] as String?, note: r['note'] as String,
+        )
+    ];
+  }
+
+  Future<void> saveCheque({
+    String? id,
+    required String kind,
+    required String number,
+    required String bank,
+    required int amount,
+    required String dueDate,
+    String? partyId,
+    String note = '',
+  }) async {
+    // Editing keeps the status/transaction link of an existing cheque.
+    Map<String, Object?> keep = {};
+    if (id != null) {
+      final old = await store.db.query('cheques', where: 'id=?', whereArgs: [id]);
+      if (old.isNotEmpty) {
+        keep = {'status': old.first['status'], 'account_id': old.first['account_id'], 'tx_id': old.first['tx_id']};
+      }
+    }
+    await store.save('cheques', {
+      'id': ?id, 'kind': kind, 'number': number, 'bank': bank, 'amount': amount,
+      'due_date': dueDate, 'party_id': partyId, 'note': note, ...keep,
+    });
+    changed();
+  }
+
+  /// Changes a cheque's status. Clearing it books a receipt/payment in
+  /// [accountId]; moving it away from "cleared" removes that transaction.
+  Future<void> setChequeStatus(Cheque c, String status, {String? accountId, String? date}) async {
+    String? txId = c.txId;
+    if (c.status == 'cleared' && status != 'cleared' && txId != null) {
+      await store.softDelete('transactions', txId);
+      txId = null;
+    }
+    if (status == 'cleared' && c.status != 'cleared') {
+      txId = await saveTx(
+        date: date ?? todayIso(),
+        kind: c.kind == 'received' ? 'receipt' : 'payment',
+        amount: c.amount,
+        accountId: accountId!,
+        partyId: c.partyId,
+        description: 'وصول چک ${c.number}'.trim(),
+      );
+    }
+    await store.save('cheques', {
+      'id': c.id, 'kind': c.kind, 'number': c.number, 'bank': c.bank, 'amount': c.amount,
+      'due_date': c.dueDate, 'party_id': c.partyId, 'note': c.note,
+      'status': status, 'account_id': status == 'cleared' ? accountId : null, 'tx_id': txId,
+    });
+    changed();
+  }
+
+  Future<void> deleteCheque(Cheque c) async {
+    if (c.txId != null) await store.softDelete('transactions', c.txId!);
+    await store.softDelete('cheques', c.id);
+    changed();
+  }
+
   // ---- reports ------------------------------------------------------------
 
   Future<MonthReport> report(String from, String toExclusive) async {
@@ -296,6 +559,80 @@ class Repo extends ChangeNotifier {
       list.add((r['name'] as String, kind, total));
     }
     return MonthReport(income, expense, list);
+  }
+
+  /// Quantity and revenue of sold goods (sales minus returns) in a date range.
+  Future<List<ProductSales>> productSales(String from, String toExclusive) async {
+    final rows = await store.db.rawQuery('''
+      SELECT it.title AS name, COALESCE(p.unit,'') AS unit,
+        SUM(it.qty * CASE i.kind WHEN 'sale' THEN 1 ELSE -1 END) AS qty,
+        SUM(ROUND(it.qty*it.unit_price) * CASE i.kind WHEN 'sale' THEN 1 ELSE -1 END) AS revenue
+      FROM invoice_items it
+      JOIN invoices i ON i.id=it.invoice_id
+      LEFT JOIN products p ON p.id=it.product_id
+      WHERE it.deleted=0 AND i.deleted=0 AND i.kind IN ('sale','sale_return') AND i.date>=? AND i.date<?
+      GROUP BY COALESCE(it.product_id, it.title) ORDER BY revenue DESC''', [from, toExclusive]);
+    return [
+      for (final r in rows)
+        ProductSales(r['name'] as String, r['unit'] as String, (r['qty'] as num).toDouble(), (r['revenue'] as num).round())
+    ];
+  }
+
+  Future<Dashboard> dashboard() async {
+    final accs = await accounts();
+    final parts = await parties();
+    final now = Jalali.now();
+    final months = <(String, int, int)>[];
+    var y = now.year, m = now.month;
+    final starts = <(int, int)>[];
+    for (var i = 0; i < 6; i++) {
+      starts.add((y, m));
+      m--;
+      if (m < 1) { m = 12; y--; }
+    }
+    for (final (yy, mm) in starts.reversed) {
+      final (a, b) = jalaliMonthRange(yy, mm);
+      final r = await report(a, b);
+      months.add((monthNames[mm - 1], r.income, r.expense));
+    }
+    final cur = months.last;
+    final soon = isoOf(DateTime.now().add(const Duration(days: 7)));
+    final pending = await cheques(status: 'pending');
+    return Dashboard(
+      totalBalance: accs.fold(0, (a, b) => a + b.balance),
+      monthIncome: cur.$2,
+      monthExpense: cur.$3,
+      receivable: parts.where((p) => p.balance > 0).fold(0, (a, p) => a + p.balance),
+      payable: parts.where((p) => p.balance < 0).fold(0, (a, p) => a - p.balance),
+      months: months,
+      lowStock: (await products()).where((p) => p.low).toList(),
+      dueCheques: pending.where((c) => c.dueDate.compareTo(soon) <= 0).toList(),
+      recent: await transactions(limit: 6),
+      names: {for (final p in parts) p.id: p.name, for (final a in accs) a.id: a.name},
+    );
+  }
+
+  // ---- backup -------------------------------------------------------------
+
+  /// Complete copy of the data as JSON text.
+  Future<String> exportJson() async => jsonEncode({
+        'app': 'simple_accounting',
+        'version': 2,
+        'exportedAt': DateTime.now().toIso8601String(),
+        'data': await store.changesSince(0),
+      });
+
+  /// Merges a backup into the database (newer rows win). Returns the number of
+  /// rows that changed.
+  Future<int> importJson(String text) async {
+    final map = jsonDecode(text);
+    if (map is! Map || map['app'] != 'simple_accounting' || map['data'] is! Map) {
+      throw const FormatException('این فایل پشتیبان این برنامه نیست.');
+    }
+    final n = await store.applyRemote(Map<String, dynamic>.from(map['data'] as Map));
+    await _loadSettings();
+    notifyListeners();
+    return n;
   }
 
   // ---- helpers ------------------------------------------------------------

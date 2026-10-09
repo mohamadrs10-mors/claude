@@ -89,7 +89,7 @@ class _SyncPageState extends State<SyncPage> {
 
   @override
   Widget build(BuildContext context) {
-    return ListView(padding: const EdgeInsets.all(16), children: [
+    return Constrained(maxWidth: 760, child: ListView(padding: const EdgeInsets.all(16), children: [
       Card(
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -153,6 +153,6 @@ class _SyncPageState extends State<SyncPage> {
         'هر دو دستگاه باید به یک شبکه (Wi‑Fi) وصل باشند. در ویندوز اگر پیام فایروال آمد، «Allow» را بزنید. '
         'اگر دو دستگاه هم‌زمان یک مورد را ویرایش کنند، آخرین ویرایش می‌ماند.',
       ),
-    ]);
+    ]));
   }
 }

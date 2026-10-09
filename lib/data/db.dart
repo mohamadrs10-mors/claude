@@ -11,9 +11,45 @@ const syncTables = [
   'accounts',
   'parties',
   'categories',
+  'products',
+  'cheques',
+  'settings',
   'invoices',
   'invoice_items',
   'transactions',
+];
+
+const _schemaVersion = 2;
+
+const _v2Tables = [
+  '''CREATE TABLE products (
+    id TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
+    device_id TEXT NOT NULL, seq INTEGER NOT NULL,
+    name TEXT NOT NULL, code TEXT NOT NULL DEFAULT '', unit TEXT NOT NULL DEFAULT 'عدد',
+    sale_price INTEGER NOT NULL DEFAULT 0, buy_price INTEGER NOT NULL DEFAULT 0,
+    opening_stock REAL NOT NULL DEFAULT 0, min_stock REAL NOT NULL DEFAULT 0,
+    note TEXT NOT NULL DEFAULT '')''',
+  '''CREATE TABLE cheques (
+    id TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
+    device_id TEXT NOT NULL, seq INTEGER NOT NULL,
+    kind TEXT NOT NULL, number TEXT NOT NULL DEFAULT '', bank TEXT NOT NULL DEFAULT '',
+    amount INTEGER NOT NULL, due_date TEXT NOT NULL, party_id TEXT,
+    status TEXT NOT NULL DEFAULT 'pending', account_id TEXT, tx_id TEXT,
+    note TEXT NOT NULL DEFAULT '')''',
+  '''CREATE TABLE settings (
+    id TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
+    device_id TEXT NOT NULL, seq INTEGER NOT NULL, value TEXT NOT NULL DEFAULT '')''',
+  'CREATE INDEX idx_items_product ON invoice_items(product_id)',
+];
+
+/// Upgrade 1 -> 2: products, cheques, settings, VAT and product link.
+const _migrate1to2 = [
+  "ALTER TABLE invoices ADD COLUMN tax_percent INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE invoice_items ADD COLUMN product_id TEXT",
+  ..._v2Tables,
+  'CREATE INDEX idx_products_seq ON products(seq)',
+  'CREATE INDEX idx_cheques_seq ON cheques(seq)',
+  'CREATE INDEX idx_settings_seq ON settings(seq)',
 ];
 
 final _schema = [
@@ -34,12 +70,14 @@ final _schema = [
     id TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
     device_id TEXT NOT NULL, seq INTEGER NOT NULL,
     number INTEGER NOT NULL, kind TEXT NOT NULL, date TEXT NOT NULL, party_id TEXT NOT NULL,
-    discount INTEGER NOT NULL DEFAULT 0, note TEXT NOT NULL DEFAULT '')''',
+    discount INTEGER NOT NULL DEFAULT 0, note TEXT NOT NULL DEFAULT '',
+    tax_percent INTEGER NOT NULL DEFAULT 0)''',
   '''CREATE TABLE invoice_items (
     id TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
     device_id TEXT NOT NULL, seq INTEGER NOT NULL,
     invoice_id TEXT NOT NULL, title TEXT NOT NULL, qty REAL NOT NULL,
-    unit_price INTEGER NOT NULL, position INTEGER NOT NULL DEFAULT 0)''',
+    unit_price INTEGER NOT NULL, position INTEGER NOT NULL DEFAULT 0, product_id TEXT)''',
+  ..._v2Tables,
   '''CREATE TABLE transactions (
     id TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
     device_id TEXT NOT NULL, seq INTEGER NOT NULL,
@@ -72,7 +110,14 @@ class AppDb {
     final db = await f.openDatabase(
       dbPath,
       options: OpenDatabaseOptions(
-        version: 1,
+        version: _schemaVersion,
+        onUpgrade: (db, from, _) async {
+          if (from < 2) {
+            for (final q in _migrate1to2) {
+              await db.execute(q);
+            }
+          }
+        },
         onCreate: (db, _) async {
           for (final s in _schema) {
             await db.execute(s);

@@ -18,7 +18,12 @@ class RepoBuilder<T> extends StatefulWidget {
 class _RepoBuilderState<T> extends State<RepoBuilder<T>> {
   late Future<T> _future = widget.load();
 
-  void _reload() => setState(() => _future = widget.load());
+  void _reload() {
+    if (!mounted) return;
+    setState(() {
+      _future = widget.load();
+    });
+  }
 
   @override
   void initState() {
@@ -128,7 +133,7 @@ class _JalaliPickerState extends State<_JalaliPicker> {
 
 /// Digits-only money input that tolerates Persian digits.
 class AmountField extends StatelessWidget {
-  const AmountField({super.key, required this.controller, this.label = 'مبلغ (تومان)', this.validator});
+  const AmountField({super.key, required this.controller, this.label = 'مبلغ', this.validator});
   final TextEditingController controller;
   final String label;
   final String? Function(String?)? validator;
@@ -143,3 +148,113 @@ class AmountField extends StatelessWidget {
 }
 
 Widget gap([double h = 12]) => SizedBox(height: h);
+
+// ---- shared building blocks ------------------------------------------------
+
+String moneyC(num v) => '${money(v)} $currencyLabel';
+
+/// Rounded search box used above lists.
+class SearchBox extends StatelessWidget {
+  const SearchBox({super.key, required this.onChanged, this.hint = 'جستجو...'});
+  final ValueChanged<String> onChanged;
+  final String hint;
+
+  @override
+  Widget build(BuildContext context) => TextField(
+        onChanged: onChanged,
+        decoration: InputDecoration(
+          hintText: hint,
+          prefixIcon: const Icon(Icons.search),
+          isDense: true,
+        ),
+      );
+}
+
+/// Small coloured label such as "تسویه شده".
+class StatusChip extends StatelessWidget {
+  const StatusChip(this.text, this.color, {super.key});
+  final String text;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.14),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Text(text, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w600)),
+      );
+}
+
+/// Dashboard style metric tile.
+class StatCard extends StatelessWidget {
+  const StatCard({super.key, required this.title, required this.value, required this.icon, required this.color, this.subtitle});
+  final String title, value;
+  final String? subtitle;
+  final IconData icon;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(children: [
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(color: color.withValues(alpha: 0.14), borderRadius: BorderRadius.circular(12)),
+              child: Icon(icon, color: color),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(title, style: Theme.of(context).textTheme.bodySmall),
+                const SizedBox(height: 2),
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: AlignmentDirectional.centerStart,
+                  child: Text(value, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
+                ),
+                if (subtitle != null) Text(subtitle!, style: Theme.of(context).textTheme.bodySmall),
+              ]),
+            ),
+          ]),
+        ),
+      );
+}
+
+/// Titled card used to group content.
+class Section extends StatelessWidget {
+  const Section({super.key, required this.title, required this.child, this.trailing, this.padding = const EdgeInsets.all(16)});
+  final String title;
+  final Widget child;
+  final Widget? trailing;
+  final EdgeInsetsGeometry padding;
+
+  @override
+  Widget build(BuildContext context) => Card(
+        child: Padding(
+          padding: padding,
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Expanded(child: Text(title, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700))),
+              ?trailing,
+            ]),
+            const SizedBox(height: 12),
+            child,
+          ]),
+        ),
+      );
+}
+
+/// Keeps content readable on very wide windows.
+class Constrained extends StatelessWidget {
+  const Constrained({super.key, required this.child, this.maxWidth = 980});
+  final Widget child;
+  final double maxWidth;
+
+  @override
+  Widget build(BuildContext context) =>
+      Align(alignment: Alignment.topCenter, child: ConstrainedBox(constraints: BoxConstraints(maxWidth: maxWidth), child: child));
+}

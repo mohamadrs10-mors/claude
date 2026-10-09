@@ -16,17 +16,12 @@ class AccountsPage extends StatelessWidget {
           final (accounts, cats) = d;
           final total = accounts.fold<int>(0, (a, b) => a + b.balance);
           return Scaffold(
-            body: ListView(padding: const EdgeInsets.only(bottom: 88), children: [
-              Card(
-                margin: const EdgeInsets.all(12),
-                child: ListTile(
-                  title: const Text('جمع موجودی همهٔ حساب‌ها'),
-                  trailing: Text('${money(total)} تومان',
-                      style: Theme.of(c).textTheme.titleMedium?.copyWith(color: amountColor(c, total))),
-                ),
-              ),
+            body: Constrained(child: ListView(padding: const EdgeInsets.fromLTRB(16, 8, 16, 32), children: [
+              StatCard(title: 'جمع موجودی همهٔ حساب‌ها', value: moneyC(total), icon: Icons.account_balance_wallet_outlined, color: amountColor(c, total) == Theme.of(c).hintColor ? Theme.of(c).colorScheme.primary : amountColor(c, total)),
+              const SizedBox(height: 16),
               _header(c, 'حساب‌ها', () => _editAccount(c)),
               if (accounts.isEmpty) emptyState('هنوز حسابی ندارید. یک صندوق یا حساب بانکی اضافه کنید.'),
+              if (accounts.isNotEmpty) Card(child: Column(children: [
               for (final a in accounts)
                 ListTile(
                   leading: Icon(a.kind == 'cash' ? Icons.payments_outlined : Icons.account_balance_outlined),
@@ -35,9 +30,11 @@ class AccountsPage extends StatelessWidget {
                   trailing: Text(money(a.balance), style: TextStyle(color: amountColor(c, a.balance), fontWeight: FontWeight.bold)),
                   onTap: () => _editAccount(c, a),
                 ),
-              const Divider(),
+              ])),
+              const SizedBox(height: 16),
               _header(c, 'دسته‌بندی‌ها', () => _editCategory(c)),
               if (cats.isEmpty) emptyState('برای گزارش بهتر، دسته‌بندی درآمد و هزینه تعریف کنید.'),
+              if (cats.isNotEmpty) Card(child: Column(children: [
               for (final k in cats)
                 ListTile(
                   leading: Icon(k.kind == 'income' ? Icons.south_west : Icons.north_east,
@@ -46,13 +43,14 @@ class AccountsPage extends StatelessWidget {
                   subtitle: Text(k.kind == 'income' ? 'درآمد' : 'هزینه'),
                   onTap: () => _editCategory(c, k),
                 ),
-            ]),
+              ])),
+            ])),
           );
         },
       );
 
   Widget _header(BuildContext c, String t, VoidCallback add) => Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16),
+        padding: const EdgeInsets.only(bottom: 8),
         child: Row(children: [
           Text(t, style: Theme.of(c).textTheme.titleMedium),
           const Spacer(),
@@ -88,7 +86,7 @@ class AccountsPage extends StatelessWidget {
                 onSelectionChanged: (s) => set(() => kind = s.first),
               ),
               gap(),
-              AmountField(controller: opening, label: 'موجودی اولیه (تومان)'),
+              AmountField(controller: opening, label: 'موجودی اولیه'),
             ]),
           ),
           actions: [

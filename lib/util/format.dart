@@ -21,6 +21,9 @@ String enDigits(String s) {
 int parseAmount(String s) =>
     int.tryParse(enDigits(s).replaceAll(RegExp(r'[^\d-]'), '')) ?? 0;
 
+/// Display name of the currency (changeable in settings).
+String currencyLabel = 'تومان';
+
 final _num = NumberFormat('#,###', 'en');
 
 String money(num v) => faDigits('${v < 0 ? '-' : ''}${_num.format(v.abs())}');
