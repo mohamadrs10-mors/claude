@@ -145,6 +145,22 @@ class ProductSales {
   final int revenue;
 }
 
+/// Sales of one product to one party (sales minus returns).
+class PartySales {
+  PartySales(this.partyId, this.name, this.qty, this.revenue, this.invoices);
+  final String partyId, name;
+  final double qty;
+  final int revenue, invoices;
+}
+
+/// One invoice line of a product sold to a party.
+class SaleLine {
+  SaleLine(this.date, this.number, this.kind, this.qty, this.unitPrice, this.total);
+  final String date, kind;
+  final int number, unitPrice, total;
+  final double qty;
+}
+
 class Dashboard {
   Dashboard({
     required this.totalBalance,
@@ -646,6 +662,47 @@ class Repo extends ChangeNotifier {
     return [
       for (final r in rows)
         ProductSales(r['name'] as String, r['unit'] as String, (r['qty'] as num).toDouble(), (r['revenue'] as num).round())
+    ];
+  }
+
+  // Lines typed by hand (not picked from the product list) are matched by name.
+  static const _productLine =
+      '(it.product_id=? OR (it.product_id IS NULL AND it.title=(SELECT name FROM products WHERE id=?)))';
+
+  /// Who bought a product: quantity and revenue per party (sales minus
+  /// returns), highest revenue first. Dates are ISO strings, [toExclusive] is
+  /// not included.
+  Future<List<PartySales>> productSalesByParty(String productId, {String? from, String? toExclusive}) async {
+    final rows = await store.db.rawQuery('''
+      SELECT i.party_id AS party_id, COALESCE(pa.name,'(شخص حذف‌شده)') AS name,
+        SUM(it.qty * CASE i.kind WHEN 'sale' THEN 1 ELSE -1 END) AS qty,
+        SUM(ROUND(it.qty*it.unit_price) * CASE i.kind WHEN 'sale' THEN 1 ELSE -1 END) AS revenue,
+        COUNT(DISTINCT i.id) AS invoices
+      FROM invoice_items it
+      JOIN invoices i ON i.id=it.invoice_id
+      LEFT JOIN parties pa ON pa.id=i.party_id
+      WHERE it.deleted=0 AND i.deleted=0 AND i.kind IN ('sale','sale_return') AND $_productLine
+        ${from == null ? '' : 'AND i.date>=?'} ${toExclusive == null ? '' : 'AND i.date<?'}
+      GROUP BY i.party_id ORDER BY revenue DESC, name''', [productId, productId, ?from, ?toExclusive]);
+    return [
+      for (final r in rows)
+        PartySales(r['party_id'] as String, r['name'] as String, (r['qty'] as num).toDouble(),
+            (r['revenue'] as num).round(), r['invoices'] as int)
+    ];
+  }
+
+  /// The invoice lines behind one row of [productSalesByParty].
+  Future<List<SaleLine>> productSaleLines(String productId, String partyId, {String? from, String? toExclusive}) async {
+    final rows = await store.db.rawQuery('''
+      SELECT i.date AS date, i.number AS number, i.kind AS kind, it.qty AS qty, it.unit_price AS unit_price
+      FROM invoice_items it JOIN invoices i ON i.id=it.invoice_id
+      WHERE it.deleted=0 AND i.deleted=0 AND i.kind IN ('sale','sale_return') AND i.party_id=? AND $_productLine
+        ${from == null ? '' : 'AND i.date>=?'} ${toExclusive == null ? '' : 'AND i.date<?'}
+      ORDER BY i.date DESC, i.number DESC''', [partyId, productId, productId, ?from, ?toExclusive]);
+    return [
+      for (final r in rows)
+        SaleLine(r['date'] as String, r['number'] as int, r['kind'] as String, (r['qty'] as num).toDouble(),
+            r['unit_price'] as int, ((r['qty'] as num) * (r['unit_price'] as int)).round())
     ];
   }
 

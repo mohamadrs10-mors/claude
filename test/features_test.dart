@@ -18,6 +18,7 @@ Future<Repo> newRepo() async {
 
 void main() {
   costingTests();
+  salesByPartyTests();
 
   test('products, stock, VAT and return invoices', () async {
     final r = await newRepo();
@@ -140,6 +141,56 @@ void main() {
     await store.save('costings', {'product_id': 'p', 'lines': '[]'});
     await store.save('formulas', {'name': 'f', 'expression': 'cost'});
     await store.close();
+  });
+}
+
+void salesByPartyTests() {
+  test('sales of a product per party, with returns, linked and typed lines, and periods', () async {
+    final r = await newRepo();
+    await r.saveParty(name: 'الف');
+    await r.saveParty(name: 'ب');
+    await r.saveParty(name: 'ج');
+    final ps = {for (final p in await r.parties()) p.name: p.id};
+    await r.saveProduct(name: 'برنج', salePrice: 100);
+    await r.saveProduct(name: 'شکر', salePrice: 50);
+    final rice = (await r.products()).firstWhere((p) => p.name == 'برنج');
+    final sugar = (await r.products()).firstWhere((p) => p.name == 'شکر');
+
+    Future<void> inv(int n, String kind, String date, String party, List<InvoiceItem> items) =>
+        r.saveInvoice(number: n, kind: kind, date: date, partyId: ps[party]!, discount: 0, note: '', items: items);
+
+    await inv(1, 'sale', '2025-03-01', 'الف', [InvoiceItem('برنج', 3, 100, productId: rice.id), InvoiceItem('شکر', 1, 50, productId: sugar.id)]);
+    await inv(2, 'sale', '2025-04-01', 'الف', [InvoiceItem('برنج', 2, 110, productId: rice.id)]);
+    await inv(3, 'sale_return', '2025-04-02', 'الف', [InvoiceItem('برنج', 1, 110, productId: rice.id)]);
+    await inv(4, 'sale', '2025-03-05', 'ب', [InvoiceItem('برنج', 5, 100, productId: rice.id)]);
+    await inv(5, 'sale', '2025-03-06', 'ب', [InvoiceItem('برنج', 1, 90)]); // typed by hand, same name
+    await inv(6, 'purchase', '2025-03-07', 'ج', [InvoiceItem('برنج', 100, 70, productId: rice.id)]); // not a sale
+    await inv(7, 'sale', '2025-03-08', 'ج', [InvoiceItem('شکر', 4, 50, productId: sugar.id)]);
+
+    final all = await r.productSalesByParty(rice.id);
+    expect(all.map((e) => e.name), ['ب', 'الف']); // ب: 590, الف: 300+220-110=410
+    expect(all[0].qty, 6);
+    expect(all[0].revenue, 590);
+    expect(all[0].invoices, 2);
+    expect(all[1].qty, 4);
+    expect(all[1].revenue, 410);
+    expect(all[1].invoices, 3);
+
+    final march = await r.productSalesByParty(rice.id, from: '2025-03-01', toExclusive: '2025-04-01');
+    expect({for (final e in march) e.name: e.revenue}, {'ب': 590, 'الف': 300});
+
+    final sugarSales = await r.productSalesByParty(sugar.id);
+    expect({for (final e in sugarSales) e.name: e.revenue}, {'ج': 200, 'الف': 50});
+
+    final lines = await r.productSaleLines(rice.id, ps['الف']!);
+    expect(lines.map((l) => l.number), [3, 2, 1]);
+    expect(lines.first.kind, 'sale_return');
+    expect(lines.last.total, 300);
+    expect(await r.productSaleLines(rice.id, ps['ج']!), isEmpty);
+
+    // Deleted invoices disappear.
+    await r.deleteInvoice((await r.invoices()).firstWhere((i) => i.number == 4).id);
+    expect((await r.productSalesByParty(rice.id)).firstWhere((e) => e.name == 'ب').revenue, 90);
   });
 }
 

@@ -297,6 +297,67 @@ class PdfDocs {
     return doc.save();
   }
 
+  /// Sales of one product per party for a period.
+  Future<Uint8List> productBuyers(Product product, List<PartySales> rows, String periodLabel) async {
+    final doc = pw.Document(title: 'فروش ${product.name} به تفکیک اشخاص', author: _business);
+    final theme = await _theme();
+    final totalRevenue = rows.fold<int>(0, (a, r) => a + r.revenue);
+    final totalQty = rows.fold<double>(0, (a, r) => a + r.qty);
+    doc.addPage(pw.MultiPage(
+      pageFormat: PdfPageFormat.a4,
+      margin: const pw.EdgeInsets.all(32),
+      textDirection: pw.TextDirection.rtl,
+      theme: theme,
+      build: (c) => [
+        _text(_business, style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
+        _text('فروش «${product.name}» به تفکیک اشخاص', style: pw.TextStyle(fontSize: 14, color: _accent, fontWeight: pw.FontWeight.bold)),
+        _text('بازه: $periodLabel • تاریخ گزارش: ${jalaliText(todayIso())}', style: const pw.TextStyle(fontSize: 9)),
+        pw.SizedBox(height: 10),
+        pw.Table(
+          border: pw.TableBorder.all(color: _line, width: 0.6),
+          columnWidths: _widths(const [
+            pw.FixedColumnWidth(40),
+            pw.FlexColumnWidth(3),
+            pw.FlexColumnWidth(1.4),
+            pw.FlexColumnWidth(1),
+            pw.FlexColumnWidth(1.8),
+            pw.FlexColumnWidth(1),
+          ]),
+          children: [
+            _row([
+              _cell('ردیف', bold: true, align: pw.TextAlign.center),
+              _cell('نام شخص', bold: true),
+              _cell('تعداد (${product.unit})', bold: true, align: pw.TextAlign.left),
+              _cell('فاکتور', bold: true, align: pw.TextAlign.center),
+              _cell('مبلغ فروش', bold: true, align: pw.TextAlign.left),
+              _cell('سهم', bold: true, align: pw.TextAlign.left),
+            ], background: _soft),
+            for (var i = 0; i < rows.length; i++)
+              _row([
+                _cell(faDigits('${i + 1}'), align: pw.TextAlign.center),
+                _cell(rows[i].name),
+                _cell(_qty(rows[i].qty), align: pw.TextAlign.left),
+                _cell(faDigits('${rows[i].invoices}'), align: pw.TextAlign.center),
+                _cell(money(rows[i].revenue), align: pw.TextAlign.left),
+                _cell(totalRevenue > 0 ? '${numText(rows[i].revenue * 100 / totalRevenue, 1)}٪' : '', align: pw.TextAlign.left),
+              ]),
+            _row([
+              _cell('', align: pw.TextAlign.center),
+              _cell('جمع کل', bold: true),
+              _cell(_qty(totalQty), bold: true, align: pw.TextAlign.left),
+              _cell(faDigits('${rows.fold<int>(0, (a, r) => a + r.invoices)}'), bold: true, align: pw.TextAlign.center),
+              _cell(money(totalRevenue), bold: true, align: pw.TextAlign.left),
+              _cell('', align: pw.TextAlign.left),
+            ], background: _soft),
+          ],
+        ),
+        pw.SizedBox(height: 6),
+        _text('مبالغ بر حسب $currencyLabel؛ برگشت از فروش کسر شده است.', style: const pw.TextStyle(fontSize: 8)),
+      ],
+    ));
+    return doc.save();
+  }
+
   // ---- output -------------------------------------------------------------
 
   static Future<void> printBytes(Uint8List bytes, String name, {PdfPageFormat? format}) =>

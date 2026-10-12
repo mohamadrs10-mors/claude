@@ -5,6 +5,7 @@ import '../data/repo.dart';
 import '../print/pdf_docs.dart';
 import '../util/format.dart';
 import 'common.dart';
+import 'product_buyers_tab.dart';
 import 'products_page.dart';
 
 class ReportsPage extends StatefulWidget {
@@ -17,7 +18,7 @@ class ReportsPage extends StatefulWidget {
 class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStateMixin {
   final now = Jalali.now();
   late int year = now.year, month = now.month;
-  late final TabController tabs = TabController(length: 3, vsync: this);
+  late final TabController tabs = TabController(length: 4, vsync: this);
 
   @override
   void dispose() {
@@ -36,11 +37,17 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
     final (from, to) = jalaliMonthRange(year, month);
     return Constrained(
       child: Column(children: [
-        TabBar(controller: tabs, tabs: const [Tab(text: 'درآمد و هزینه'), Tab(text: 'فروش کالا'), Tab(text: 'بدهکاران و بستانکاران')]),
+        TabBar(controller: tabs, isScrollable: true, tabAlignment: TabAlignment.start, tabs: const [
+          Tab(text: 'درآمد و هزینه'),
+          Tab(text: 'فروش کالا'),
+          Tab(text: 'فروش کالا به تفکیک شخص'),
+          Tab(text: 'بدهکاران و بستانکاران'),
+        ]),
         Expanded(
           child: TabBarView(controller: tabs, children: [
             _monthPicker(_cashReport(from, to)),
             _monthPicker(_productReport(from, to)),
+            ProductBuyersTab(repo: widget.repo),
             _partyReport(),
           ]),
         ),

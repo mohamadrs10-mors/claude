@@ -68,3 +68,7 @@ String numText(num v, [int digits = 2]) {
   final parts = s.split('.');
   return faDigits('${money(int.parse(parts[0]))}${parts.length > 1 ? '٫${parts[1]}' : ''}');
 }
+
+/// ISO range [start, endExclusive) of a Jalali year.
+(String, String) jalaliYearRange(int year) =>
+    (isoOf(Jalali(year, 1, 1).toDateTime()), isoOf(Jalali(year + 1, 1, 1).toDateTime()));
