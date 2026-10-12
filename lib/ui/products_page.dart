@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../data/repo.dart';
 import '../util/format.dart';
 import 'common.dart';
+import 'costing_page.dart';
 
 const commonUnits = ['عدد', 'کیلوگرم', 'گرم', 'متر', 'لیتر', 'بسته', 'کارتن', 'جعبه', 'دست', 'جفت', 'ساعت', 'خدمت'];
 
@@ -75,6 +76,7 @@ class _ProductsPageState extends State<ProductsPage> {
         if (p.code.isNotEmpty) 'کد ${faDigits(p.code)}',
         'فروش ${money(p.salePrice)}',
         if (p.buyPrice > 0) 'خرید ${money(p.buyPrice)}',
+        if (p.costPrice > 0) 'تمام‌شده ${money(p.costPrice)}',
       ].join(' • ')),
       trailing: StatusChip('${qtyText(p.stock)} ${p.unit}', color),
       onTap: () => editProduct(c, widget.repo, p),
@@ -177,6 +179,17 @@ Future<void> editProduct(BuildContext c, Repo repo, [Product? p]) async {
         ),
       ),
       actions: [
+        if (p != null)
+          TextButton.icon(
+            onPressed: () {
+              Navigator.pop(dc);
+              if (c.mounted) {
+                Navigator.push(c, MaterialPageRoute(builder: (_) => CostingPage(repo: repo, productId: p.id)));
+              }
+            },
+            icon: const Icon(Icons.calculate_outlined),
+            label: const Text('قیمت تمام‌شده'),
+          ),
         if (p != null)
           TextButton(
             onPressed: () async {

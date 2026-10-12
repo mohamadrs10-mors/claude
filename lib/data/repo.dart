@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shamsi_date/shamsi_date.dart';
 
 import '../util/format.dart';
+import 'costing.dart';
 import 'db.dart';
 
 class Account {
@@ -37,11 +38,19 @@ class Product {
     this.minStock = 0,
     this.note = '',
     this.stock = 0,
+    this.costPrice = 0,
   });
   final String id, name, code, unit, note;
-  final int salePrice, buyPrice;
+
+  /// Final cost of one unit from the cost sheet (0 when there is none).
+  final int salePrice, buyPrice, costPrice;
   final double openingStock, minStock, stock;
   bool get low => minStock > 0 && stock <= minStock;
+}
+
+class SavedFormula {
+  SavedFormula(this.id, this.name, this.expression);
+  final String id, name, expression;
 }
 
 class Tx {
@@ -290,7 +299,8 @@ class Repo extends ChangeNotifier {
       SELECT p.*, p.opening_stock + COALESCE((
         SELECT SUM(it.qty * CASE WHEN i.kind IN ('purchase','sale_return') THEN 1 ELSE -1 END)
         FROM invoice_items it JOIN invoices i ON i.id=it.invoice_id
-        WHERE it.product_id=p.id AND it.deleted=0 AND i.deleted=0),0) AS stock
+        WHERE it.product_id=p.id AND it.deleted=0 AND i.deleted=0),0) AS stock,
+        COALESCE((SELECT c.unit_cost FROM costings c WHERE c.product_id=p.id AND c.deleted=0),0) AS cost_price
       FROM products p WHERE p.deleted=0 ORDER BY p.name''');
     return [
       for (final r in rows)
@@ -305,6 +315,7 @@ class Repo extends ChangeNotifier {
           minStock: (r['min_stock'] as num).toDouble(),
           note: r['note'] as String,
           stock: (r['stock'] as num).toDouble(),
+          costPrice: r['cost_price'] as int,
         )
     ];
   }
@@ -462,6 +473,66 @@ class Repo extends ChangeNotifier {
         await store.save('transactions', {...t, 'invoice_id': null}, exec: tx);
       }
     });
+    changed();
+  }
+
+  // ---- costing & price formulas ------------------------------------------
+
+  Future<CostSheet?> costSheet(String productId) async {
+    final rows = await store.db.query('costings', where: 'product_id=? AND deleted=0', whereArgs: [productId]);
+    if (rows.isEmpty) return null;
+    final r = rows.first;
+    return CostSheet(
+      batchQty: (r['batch_qty'] as num).toDouble(),
+      wastePercent: (r['waste_percent'] as num).toDouble(),
+      lines: CostSheet.linesFromJson(r['lines'] as String),
+      note: r['note'] as String,
+    );
+  }
+
+  /// Stores the cost sheet of a product and remembers the resulting unit cost.
+  Future<void> saveCostSheet(String productId, CostSheet s) async {
+    await store.save('costings', {
+      'id': productId,
+      'product_id': productId,
+      'batch_qty': s.batchQty,
+      'waste_percent': s.wastePercent,
+      'lines': s.linesJson(),
+      'unit_cost': computeCost(s).unitCost.round(),
+      'note': s.note,
+    });
+    changed();
+  }
+
+  Future<void> deleteCostSheet(String productId) async {
+    await store.softDelete('costings', productId);
+    changed();
+  }
+
+  /// Changes the sale or purchase price of a product from the pricing screen.
+  Future<void> setProductPrice(String productId, {int? salePrice, int? buyPrice}) async {
+    final rows = await store.db.query('products', where: 'id=? AND deleted=0', whereArgs: [productId]);
+    if (rows.isEmpty) return;
+    await store.save('products', {
+      ...rows.first,
+      'sale_price': ?salePrice,
+      'buy_price': ?buyPrice,
+    });
+    changed();
+  }
+
+  Future<List<SavedFormula>> formulas() async {
+    final rows = await store.db.query('formulas', where: 'deleted=0', orderBy: 'name');
+    return [for (final r in rows) SavedFormula(r['id'] as String, r['name'] as String, r['expression'] as String)];
+  }
+
+  Future<void> saveFormula({String? id, required String name, required String expression}) async {
+    await store.save('formulas', {'id': ?id, 'name': name, 'expression': expression});
+    changed();
+  }
+
+  Future<void> deleteFormula(String id) async {
+    await store.softDelete('formulas', id);
     changed();
   }
 

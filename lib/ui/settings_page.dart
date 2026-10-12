@@ -205,7 +205,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ]),
             ])),
             gap(16),
-            const Section(title: 'دربارهٔ برنامه', child: Text('حسابداری ساده • نسخهٔ ۱٫۱\nفونت وزیرمتن (مجوز OFL)')),
+            const Section(title: 'دربارهٔ برنامه', child: Text('حسابداری ساده • نسخهٔ ۱٫۲\nفونت وزیرمتن (مجوز OFL)')),
           ]),
         ),
       );

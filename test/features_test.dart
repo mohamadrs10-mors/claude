@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:simple_accounting/data/costing.dart';
 import 'package:simple_accounting/data/db.dart';
 import 'package:simple_accounting/data/repo.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -16,6 +17,8 @@ Future<Repo> newRepo() async {
 }
 
 void main() {
+  costingTests();
+
   test('products, stock, VAT and return invoices', () async {
     final r = await newRepo();
     await r.saveParty(name: 'مشتری');
@@ -134,6 +137,49 @@ void main() {
     expect(rows.single['tax_percent'], 0);
     await store.save('products', {'name': 'x'});
     await store.save('cheques', {'kind': 'received', 'amount': 1, 'due_date': '2025-01-01'});
+    await store.save('costings', {'product_id': 'p', 'lines': '[]'});
+    await store.save('formulas', {'name': 'f', 'expression': 'cost'});
     await store.close();
+  });
+}
+
+void costingTests() {
+  test('cost sheets and formulas are stored, shown on the product and synced', () async {
+    final a = await newRepo();
+    await a.saveProduct(name: 'صابون', buyPrice: 500, salePrice: 900);
+    final p = (await a.products()).single;
+    expect(p.costPrice, 0);
+    expect(await a.costSheet(p.id), isNull);
+
+    final sheet = CostSheet(batchQty: 10, wastePercent: 0, lines: [
+      CostLine(name: 'مواد', value: 4000),
+      CostLine(name: 'سربار', type: 'percent', value: 25),
+    ]);
+    await a.saveCostSheet(p.id, sheet);
+    final back = (await a.costSheet(p.id))!;
+    expect(back.batchQty, 10);
+    expect(back.lines.map((l) => l.name), ['مواد', 'سربار']);
+    expect(back.lines[1].type, 'percent');
+    expect((await a.products()).single.costPrice, 500); // 5000 / 10
+
+    await a.setProductPrice(p.id, salePrice: 1100);
+    final updated = (await a.products()).single;
+    expect(updated.salePrice, 1100);
+    expect(updated.buyPrice, 500);
+
+    await a.saveFormula(name: 'سود ۳۰٪', expression: 'cost * 1.3');
+    expect((await a.formulas()).single.expression, 'cost * 1.3');
+
+    // Both tables travel with the backup / sync.
+    final b = await newRepo();
+    await b.importJson(await a.exportJson());
+    expect((await b.costSheet(p.id))!.lines.length, 2);
+    expect((await b.formulas()).single.name, 'سود ۳۰٪');
+
+    await a.deleteFormula((await a.formulas()).single.id);
+    await a.deleteCostSheet(p.id);
+    expect(await a.formulas(), isEmpty);
+    expect(await a.costSheet(p.id), isNull);
+    expect((await a.products()).single.costPrice, 0);
   });
 }

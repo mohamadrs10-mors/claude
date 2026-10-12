@@ -14,12 +14,14 @@ const syncTables = [
   'products',
   'cheques',
   'settings',
+  'costings',
+  'formulas',
   'invoices',
   'invoice_items',
   'transactions',
 ];
 
-const _schemaVersion = 2;
+const _schemaVersion = 3;
 
 const _v2Tables = [
   '''CREATE TABLE products (
@@ -40,6 +42,26 @@ const _v2Tables = [
     id TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
     device_id TEXT NOT NULL, seq INTEGER NOT NULL, value TEXT NOT NULL DEFAULT '')''',
   'CREATE INDEX idx_items_product ON invoice_items(product_id)',
+];
+
+const _v3Tables = [
+  // One cost sheet per product (its id is the product id). `lines` is JSON.
+  '''CREATE TABLE costings (
+    id TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
+    device_id TEXT NOT NULL, seq INTEGER NOT NULL,
+    product_id TEXT NOT NULL, batch_qty REAL NOT NULL DEFAULT 1, waste_percent REAL NOT NULL DEFAULT 0,
+    lines TEXT NOT NULL DEFAULT '[]', unit_cost INTEGER NOT NULL DEFAULT 0, note TEXT NOT NULL DEFAULT '')''',
+  '''CREATE TABLE formulas (
+    id TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
+    device_id TEXT NOT NULL, seq INTEGER NOT NULL,
+    name TEXT NOT NULL, expression TEXT NOT NULL)''',
+];
+
+/// Upgrade 2 -> 3: cost sheets and saved price formulas.
+const _migrate2to3 = [
+  ..._v3Tables,
+  'CREATE INDEX idx_costings_seq ON costings(seq)',
+  'CREATE INDEX idx_formulas_seq ON formulas(seq)',
 ];
 
 /// Upgrade 1 -> 2: products, cheques, settings, VAT and product link.
@@ -78,6 +100,7 @@ final _schema = [
     invoice_id TEXT NOT NULL, title TEXT NOT NULL, qty REAL NOT NULL,
     unit_price INTEGER NOT NULL, position INTEGER NOT NULL DEFAULT 0, product_id TEXT)''',
   ..._v2Tables,
+  ..._v3Tables,
   '''CREATE TABLE transactions (
     id TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
     device_id TEXT NOT NULL, seq INTEGER NOT NULL,
@@ -114,6 +137,11 @@ class AppDb {
         onUpgrade: (db, from, _) async {
           if (from < 2) {
             for (final q in _migrate1to2) {
+              await db.execute(q);
+            }
+          }
+          if (from < 3) {
+            for (final q in _migrate2to3) {
               await db.execute(q);
             }
           }

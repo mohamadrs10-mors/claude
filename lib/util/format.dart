@@ -52,3 +52,19 @@ String jalaliText(String iso) {
   final e = month == 12 ? Jalali(year + 1, 1, 1) : Jalali(year, month + 1, 1);
   return (isoOf(s.toDateTime()), isoOf(e.toDateTime()));
 }
+
+/// Parses a decimal number typed in Persian or Latin digits, ignoring
+/// thousands separators ("۱٬۲۵۰٫۵" -> 1250.5). Returns 0 for empty/invalid text.
+double parseNum(String s) {
+  final t = enDigits(s).replaceAll(RegExp(r'[,٬\s]'), '').replaceAll('٫', '.');
+  return double.tryParse(t) ?? 0;
+}
+
+/// Number for display: whole numbers without decimals, otherwise up to
+/// [digits] decimals, with Persian digits and thousands separators.
+String numText(num v, [int digits = 2]) {
+  if (v == v.roundToDouble()) return money(v.round());
+  final s = v.toStringAsFixed(digits).replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '');
+  final parts = s.split('.');
+  return faDigits('${money(int.parse(parts[0]))}${parts.length > 1 ? '٫${parts[1]}' : ''}');
+}
