@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 
 import '../data/repo.dart';
 import '../print/pdf_docs.dart';
+import '../print/report_builders.dart';
 import '../util/format.dart';
 import 'common.dart';
 import 'parties_page.dart';
+import 'print_dialog.dart';
 import 'products_page.dart';
 import 'transactions_page.dart';
 
@@ -45,6 +47,15 @@ class _InvoicesPageState extends State<InvoicesPage> {
               const SizedBox(height: 12),
               SearchBox(onChanged: (v) => setState(() => q = v), hint: 'جستجوی نام شخص یا شمارهٔ فاکتور...'),
               const SizedBox(height: 8),
+              Align(
+                alignment: AlignmentDirectional.centerEnd,
+                child: PrintButton(
+                  repo: repo,
+                  label: 'چاپ فهرست',
+                  doc: () => invoicesDoc(list, names,
+                      filter: [if (kind != null) invoiceKind(kind!).label, if (q.isNotEmpty) 'جستجو: $q'].join(' • ')),
+                ),
+              ),
               SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
                 child: Row(children: [
@@ -121,10 +132,20 @@ class InvoiceViewPage extends StatelessWidget {
           final (inv, items, party, txs) = d;
           if (inv == null) return const Scaffold(body: Center(child: Text('این فاکتور حذف شد.')));
           final info = inv.info;
-          final pdf = PdfDocs(repo);
-          Future<void> print_(bool roll) async {
-            final bytes = await pdf.invoice(inv, items, party, roll: roll);
-            await PdfDocs.printBytes(bytes, '${info.label} ${inv.number}');
+          Future<void> openPrint() => showPrintDialog(
+                c,
+                repo,
+                title: '${info.label} ${faDigits('${inv.number}')}',
+                filename: 'invoice-${inv.number}.pdf',
+                build: (s, f) => PdfDocs(repo, settings: s).invoice(inv, items, party, format: f),
+              );
+          Future<void> printRoll() async {
+            try {
+              final bytes = await PdfDocs(repo).invoice(inv, items, party, roll: true);
+              await PdfDocs.printRoll(bytes, '${info.label} ${inv.number}', repo.printSettings);
+            } catch (e) {
+              if (c.mounted) toast(c, 'چاپ ممکن نشد: $e');
+            }
           }
 
           return Scaffold(
@@ -134,21 +155,10 @@ class InvoiceViewPage extends StatelessWidget {
                 PopupMenuButton<String>(
                   tooltip: 'چاپ و اشتراک‌گذاری',
                   icon: const Icon(Icons.print_outlined),
-                  onSelected: (v) async {
-                    try {
-                      if (v == 'a4') await print_(false);
-                      if (v == 'roll') await print_(true);
-                      if (v == 'share') {
-                        await PdfDocs.shareBytes(await pdf.invoice(inv, items, party), 'invoice-${inv.number}.pdf');
-                      }
-                    } catch (e) {
-                      if (c.mounted) toast(c, 'چاپ ممکن نشد: $e');
-                    }
-                  },
-                  itemBuilder: (_) => const [
-                    PopupMenuItem(value: 'a4', child: ListTile(leading: Icon(Icons.description_outlined), title: Text('چاپ A4'))),
-                    PopupMenuItem(value: 'roll', child: ListTile(leading: Icon(Icons.receipt_outlined), title: Text('چاپ رسید ۸۰ میلی‌متری'))),
-                    PopupMenuItem(value: 'share', child: ListTile(leading: Icon(Icons.share_outlined), title: Text('ذخیره / اشتراک PDF'))),
+                  onSelected: (v) => v == 'roll' ? printRoll() : openPrint(),
+                  itemBuilder: (_) => [
+                    const PopupMenuItem(value: 'page', child: ListTile(leading: Icon(Icons.description_outlined), title: Text('چاپ فاکتور (A4 / A5) و PDF'))),
+                    PopupMenuItem(value: 'roll', child: ListTile(leading: const Icon(Icons.receipt_outlined), title: Text('چاپ رسید حرارتی ${faDigits('${repo.printSettings.rollWidthMm}')} میلی‌متری'))),
                   ],
                 ),
                 IconButton(tooltip: 'ویرایش', icon: const Icon(Icons.edit_outlined), onPressed: () => openInvoiceEditor(c, repo, invoiceId: inv.id)),
@@ -219,7 +229,7 @@ class InvoiceViewPage extends StatelessWidget {
                     icon: const Icon(Icons.payments_outlined),
                     label: Text(info.paymentKind == 'receipt' ? 'ثبت دریافت' : 'ثبت پرداخت'),
                   ),
-                  OutlinedButton.icon(onPressed: () => print_(false), icon: const Icon(Icons.print_outlined), label: const Text('چاپ فاکتور')),
+                  OutlinedButton.icon(onPressed: openPrint, icon: const Icon(Icons.print_outlined), label: const Text('چاپ فاکتور')),
                 ]),
                 if (txs.isNotEmpty) ...[
                   const SizedBox(height: 16),

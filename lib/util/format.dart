@@ -28,6 +28,9 @@ final _num = NumberFormat('#,###', 'en');
 
 String money(num v) => faDigits('${v < 0 ? '-' : ''}${_num.format(v.abs())}');
 
+/// Amount with the currency name, e.g. "۱٬۲۰۰ تومان".
+String moneyC(num v) => '${money(v)} $currencyLabel';
+
 const monthNames = [
   'فروردین', 'اردیبهشت', 'خرداد', 'تیر', 'مرداد', 'شهریور',
   'مهر', 'آبان', 'آذر', 'دی', 'بهمن', 'اسفند',

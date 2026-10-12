@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shamsi_date/shamsi_date.dart';
 
 import '../util/format.dart';
+import '../print/print_settings.dart';
 import 'costing.dart';
 import 'db.dart';
 
@@ -161,6 +162,31 @@ class SaleLine {
   final double qty;
 }
 
+/// One line of a party statement.
+class StatementRow {
+  StatementRow(this.date, this.description, this.debit, this.credit, this.balance);
+  final String date, description;
+
+  /// Increases what the party owes us (sale invoice, payment we made).
+  final int debit;
+
+  /// Decreases it (money received, purchase invoice).
+  final int credit;
+
+  /// Running balance after this line. Positive: the party owes us.
+  final int balance;
+}
+
+class StatementData {
+  StatementData(this.opening, this.rows, this.closing);
+
+  /// Balance carried in from before the period.
+  final int opening, closing;
+  final List<StatementRow> rows;
+  int get totalDebit => rows.fold(0, (a, r) => a + r.debit);
+  int get totalCredit => rows.fold(0, (a, r) => a + r.credit);
+}
+
 class Dashboard {
   Dashboard({
     required this.totalBalance,
@@ -192,8 +218,20 @@ class Repo extends ChangeNotifier {
 
   Map<String, String> settings = {};
 
+  /// Page set-up for printing (per device, not synced).
+  PrintSettings printSettings = const PrintSettings();
+
   /// Loads synced settings (business info, VAT, currency). Call once at start.
-  Future<void> init() => _loadSettings();
+  Future<void> init() async {
+    await _loadSettings();
+    printSettings = await PrintSettings.load(store);
+  }
+
+  Future<void> setPrint(PrintSettings s) async {
+    printSettings = s;
+    await s.save(store);
+    notifyListeners();
+  }
 
   Future<void> _loadSettings() async {
     final rows = await store.db.query('settings', where: 'deleted=0');
@@ -704,6 +742,38 @@ class Repo extends ChangeNotifier {
         SaleLine(r['date'] as String, r['number'] as int, r['kind'] as String, (r['qty'] as num).toDouble(),
             r['unit_price'] as int, ((r['qty'] as num) * (r['unit_price'] as int)).round())
     ];
+  }
+
+  /// Chronological statement of a party for [from, toExclusive) with the
+  /// balance carried in from before the period.
+  Future<StatementData> statement(String partyId, {String? from, String? toExclusive}) async {
+    final items = <(String, int, String, int)>[]; // date, order, description, signed amount
+    for (final i in await invoices(partyId: partyId)) {
+      items.add((i.date, 0, '${i.info.label} ${faDigits('${i.number}')}', i.info.partyOwesUs ? i.total : -i.total));
+    }
+    for (final t in await transactions(partyId: partyId)) {
+      final what = t.kind == 'receipt' ? 'دریافت' : 'پرداخت';
+      items.add((t.date, 1, t.description.isEmpty ? what : '$what - ${t.description}', t.kind == 'payment' ? t.amount : -t.amount));
+    }
+    items.sort((a, b) {
+      final c = a.$1.compareTo(b.$1);
+      return c != 0 ? c : a.$2.compareTo(b.$2);
+    });
+    var running = 0;
+    var opening = 0;
+    final rows = <StatementRow>[];
+    for (final it in items) {
+      final before = from != null && it.$1.compareTo(from) < 0;
+      final after = toExclusive != null && it.$1.compareTo(toExclusive) >= 0;
+      if (after) continue;
+      running += it.$4;
+      if (before) {
+        opening = running;
+        continue;
+      }
+      rows.add(StatementRow(it.$1, it.$3, it.$4 > 0 ? it.$4 : 0, it.$4 < 0 ? -it.$4 : 0, running));
+    }
+    return StatementData(opening, rows, running);
   }
 
   Future<Dashboard> dashboard() async {

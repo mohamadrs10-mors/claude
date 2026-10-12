@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../data/repo.dart';
 import '../util/format.dart';
 import 'common.dart';
-import '../print/pdf_docs.dart';
+import 'print_dialog.dart';
 import 'invoices_page.dart';
 import 'transactions_page.dart';
 
@@ -154,13 +154,7 @@ class PartyDetailPage extends StatelessWidget {
               IconButton(
                 tooltip: 'چاپ صورت‌حساب',
                 icon: const Icon(Icons.print_outlined),
-                onPressed: () async {
-                  try {
-                    await PdfDocs.printBytes(await PdfDocs(repo).statement(p), 'صورت‌حساب ${p.name}');
-                  } catch (e) {
-                    if (c.mounted) toast(c, 'چاپ ممکن نشد: $e');
-                  }
-                },
+                onPressed: () => showStatementPrint(c, repo, p),
               ),
               IconButton(tooltip: 'ویرایش', icon: const Icon(Icons.edit_outlined), onPressed: () => editParty(c, repo, p)),
             ]),

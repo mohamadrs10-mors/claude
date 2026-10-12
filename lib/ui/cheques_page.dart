@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../data/repo.dart';
 import '../util/format.dart';
+import '../print/report_builders.dart';
 import 'common.dart';
+import 'print_dialog.dart';
 
 const _statusLabel = {'pending': 'در انتظار', 'cleared': 'وصول شده', 'bounced': 'برگشتی'};
 
@@ -60,6 +62,13 @@ class _ChequesPageState extends State<ChequesPage> with SingleTickerProviderStat
     final today = todayIso();
     final total = list.where((x) => x.status == 'pending').fold<int>(0, (a, x) => a + x.amount);
     return ListView(padding: const EdgeInsets.fromLTRB(16, 12, 16, 96), children: [
+      Align(
+        alignment: AlignmentDirectional.centerEnd,
+        child: PrintButton(
+          repo: widget.repo,
+          doc: () => chequesDoc(list, names, title: tabs.index == 0 ? 'فهرست چک‌های دریافتی' : 'فهرست چک‌های پرداختی'),
+        ),
+      ),
       StatCard(title: 'جمع چک‌های در انتظار', value: moneyC(total), icon: Icons.pending_actions, color: Colors.orange.shade800),
       const SizedBox(height: 12),
       Card(

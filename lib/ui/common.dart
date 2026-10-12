@@ -151,8 +151,6 @@ Widget gap([double h = 12]) => SizedBox(height: h);
 
 // ---- shared building blocks ------------------------------------------------
 
-String moneyC(num v) => '${money(v)} $currencyLabel';
-
 /// Rounded search box used above lists.
 class SearchBox extends StatelessWidget {
   const SearchBox({super.key, required this.onChanged, this.hint = 'جستجو...'});

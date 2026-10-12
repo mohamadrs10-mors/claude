@@ -7,13 +7,17 @@ import 'package:printing/printing.dart';
 
 import '../data/repo.dart';
 import '../util/format.dart';
+import 'print_settings.dart';
+import 'report_doc.dart';
 
-/// Builds printable PDFs (A4 invoice, 80 mm receipt, party statement).
-/// Persian shaping and right-to-left layout are done by the pdf package using
-/// the embedded Vazirmatn font.
+/// Builds printable PDFs: invoice (any paper size, or a thermal roll),
+/// party statement and every report. Persian shaping and right-to-left layout
+/// are done by the pdf package using the embedded Vazirmatn font. Paper size,
+/// margins and text size come from [PrintSettings].
 class PdfDocs {
-  PdfDocs(this.repo);
+  PdfDocs(this.repo, {PrintSettings? settings}) : s = settings ?? repo.printSettings;
   final Repo repo;
+  final PrintSettings s;
 
   static pw.Font? _regular, _bold;
 
@@ -25,6 +29,11 @@ class PdfDocs {
 
   String get _business => repo.setting('business_name', 'حسابداری ساده');
 
+  /// Scaled font size.
+  double _s(double v) => v * s.fontScale;
+
+  pw.EdgeInsets get _margin => pw.EdgeInsets.all(s.marginMm * PdfPageFormat.mm);
+
   static String _qty(double q) => faDigits(q == q.roundToDouble() ? '${q.round()}' : q.toString());
 
   static final _accent = PdfColor.fromInt(0xFF0F5F58);
@@ -33,14 +42,18 @@ class PdfDocs {
 
   /// The pdf package draws the zero-width non-joiner (نیم‌فاصله) as an
   /// overlapping glyph, so it is replaced by a thin space.
-  static String _z(String s) => s.replaceAll('\u200c', '\u2009');
+  static String _z(String s) => s.replaceAll('‌', ' ');
 
-  static pw.Widget _text(String s, {pw.TextStyle? style, pw.TextAlign? textAlign}) =>
-      pw.Text(_z(s), style: style, textAlign: textAlign);
+  pw.Widget _text(String text, {double size = 10, bool bold = false, PdfColor? color, pw.TextAlign? align}) => pw.Text(
+        _z(text),
+        textAlign: align,
+        style: pw.TextStyle(fontSize: _s(size), fontWeight: bold ? pw.FontWeight.bold : null, color: color),
+      );
 
   /// pw.Table always lays columns out left to right, so rows are written in
   /// reading order and reversed here to get a right-to-left table.
-  static pw.TableRow _row(List<pw.Widget> cells, {PdfColor? background}) => pw.TableRow(
+  static pw.TableRow _row(List<pw.Widget> cells, {PdfColor? background, bool repeat = false}) => pw.TableRow(
+        repeat: repeat,
         decoration: background == null ? null : pw.BoxDecoration(color: background),
         children: cells.reversed.toList(),
       );
@@ -48,16 +61,122 @@ class PdfDocs {
   static Map<int, pw.TableColumnWidth> _widths(List<pw.TableColumnWidth> w) =>
       {for (var i = 0; i < w.length; i++) i: w[w.length - 1 - i]};
 
-  pw.Widget _cell(String t, {bool bold = false, pw.TextAlign align = pw.TextAlign.right, PdfColor? color, double size = 10}) =>
-      pw.Padding(
-        padding: const pw.EdgeInsets.symmetric(horizontal: 6, vertical: 5),
+  pw.Widget _cell(String t, {bool bold = false, Col col = Col.text, PdfColor? color, double size = 10}) => pw.Padding(
+        padding: const pw.EdgeInsets.symmetric(horizontal: 6, vertical: 4),
         child: _text(t,
-            textAlign: align,
-            style: pw.TextStyle(fontSize: size, fontWeight: bold ? pw.FontWeight.bold : null, color: color)),
+            bold: bold,
+            color: color,
+            size: size,
+            align: switch (col) {
+              Col.text => pw.TextAlign.right,
+              Col.number => pw.TextAlign.left,
+              Col.center => pw.TextAlign.center,
+            }),
       );
 
-  /// A4 invoice, or an 80 mm roll receipt when [roll] is true.
-  Future<Uint8List> invoice(Invoice inv, List<InvoiceItem> items, Party? party, {bool roll = false}) async {
+  pw.Widget _tableOf(ReportTable t) => pw.Table(
+        border: pw.TableBorder.all(color: _line, width: 0.6),
+        columnWidths: _widths([for (final f in t.flex) pw.FlexColumnWidth(f)]),
+        children: [
+          _row([for (var i = 0; i < t.headers.length; i++) _cell(t.headers[i], bold: true, col: t.cols[i])],
+              background: _soft, repeat: true),
+          for (final r in t.rows) _row([for (var i = 0; i < r.length; i++) _cell(r[i], col: t.cols[i])]),
+          if (t.totals != null)
+            _row([for (var i = 0; i < t.totals!.length; i++) _cell(t.totals![i], bold: true, col: t.cols[i])], background: _soft),
+        ],
+      );
+
+  pw.Widget _footer(pw.Context c) => pw.Align(
+        alignment: pw.Alignment.center,
+        child: pw.Text('صفحه ${faDigits('${c.pageNumber}')} از ${faDigits('${c.pagesCount}')}',
+            style: pw.TextStyle(fontSize: _s(8), color: PdfColors.grey600)),
+      );
+
+  // ---- generic report -----------------------------------------------------
+
+  /// Any report: business name, title, optional summary boxes and tables.
+  /// [format] is the page the print dialog asked for (defaults to the
+  /// configured paper), so changing the paper in the dialog re-lays the page.
+  Future<Uint8List> report(ReportDoc d, {PdfPageFormat? format}) async {
+    final doc = pw.Document(title: d.title, author: _business);
+    final theme = await _theme();
+    doc.addPage(pw.MultiPage(
+      pageFormat: format ?? s.format,
+      margin: _margin,
+      textDirection: pw.TextDirection.rtl,
+      theme: theme,
+      footer: _footer,
+      build: (c) => [
+        _text(_business, size: 15, bold: true),
+        _text(d.title, size: 13, bold: true, color: _accent),
+        if (d.subtitle.isNotEmpty) _text('${d.subtitle} • تاریخ گزارش: ${jalaliText(todayIso())}', size: 9)
+        else _text('تاریخ گزارش: ${jalaliText(todayIso())}', size: 9),
+        pw.SizedBox(height: 10),
+        if (d.summary.isNotEmpty) ...[
+          pw.Wrap(spacing: 8, runSpacing: 8, children: [
+            for (final (label, value) in d.summary)
+              pw.Container(
+                padding: const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: pw.BoxDecoration(color: _soft, border: pw.Border.all(color: _line, width: 0.5), borderRadius: pw.BorderRadius.circular(6)),
+                child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+                  _text(label, size: 8, color: PdfColors.grey700),
+                  _text(value, size: 11, bold: true),
+                ]),
+              ),
+          ]),
+          pw.SizedBox(height: 12),
+        ],
+        for (final t in d.tables) ...[
+          if (t.heading != null) ...[_text(t.heading!, size: 11, bold: true), pw.SizedBox(height: 4)],
+          _tableOf(t),
+          pw.SizedBox(height: 14),
+        ],
+        if (d.footnote.isNotEmpty) _text(d.footnote, size: 8, color: PdfColors.grey700),
+      ],
+    ));
+    return doc.save();
+  }
+
+  // ---- party statement ----------------------------------------------------
+
+  /// Statement of a party for a period (null = everything), with the balance
+  /// carried in from before it.
+  Future<Uint8List> statement(Party party, {String? from, String? toExclusive, String periodLabel = 'کل دوران', PdfPageFormat? format}) async {
+    final d = await repo.statement(party.id, from: from, toExclusive: toExclusive);
+    String bal(int v) => v == 0 ? '۰' : (v > 0 ? '${money(v)} بدهکار' : '${money(-v)} بستانکار');
+    return report(
+      ReportDoc(
+        title: 'صورت‌حساب ${party.name}',
+        subtitle: 'بازه: $periodLabel${party.phone.isEmpty ? '' : ' • تلفن: ${faDigits(party.phone)}'}',
+        summary: [
+          ('مانده از قبل', bal(d.opening)),
+          ('جمع بدهکار', moneyC(d.totalDebit)),
+          ('جمع بستانکار', moneyC(d.totalCredit)),
+          ('مانده پایان', bal(d.closing)),
+        ],
+        tables: [
+          ReportTable(
+            headers: const ['تاریخ', 'شرح', 'بدهکار', 'بستانکار', 'مانده'],
+            cols: const [Col.center, Col.text, Col.number, Col.number, Col.number],
+            flex: const [1.4, 3.4, 1.6, 1.6, 2],
+            rows: [
+              if (from != null && d.opening != 0) ['', 'مانده از قبل', '', '', money(d.opening)],
+              for (final r in d.rows)
+                [jalaliText(r.date), r.description, r.debit > 0 ? money(r.debit) : '', r.credit > 0 ? money(r.credit) : '', money(r.balance)],
+            ],
+            totals: ['', 'جمع', money(d.totalDebit), money(d.totalCredit), money(d.closing)],
+          ),
+        ],
+        footnote: 'بدهکار یعنی طلب ما از شخص؛ بستانکار یعنی بدهی ما به او. مبالغ بر حسب $currencyLabel.',
+      ),
+      format: format,
+    );
+  }
+
+  // ---- invoice ------------------------------------------------------------
+
+  /// An invoice on the configured paper, or a thermal roll when [roll] is true.
+  Future<Uint8List> invoice(Invoice inv, List<InvoiceItem> items, Party? party, {bool roll = false, PdfPageFormat? format}) async {
     final doc = pw.Document(title: '${inv.info.label} ${inv.number}', author: _business);
     final theme = await _theme();
     final info = inv.info;
@@ -78,84 +197,107 @@ class PdfDocs {
 
     if (roll) {
       doc.addPage(pw.Page(
-        pageFormat: const PdfPageFormat(80 * PdfPageFormat.mm, double.infinity, marginAll: 4 * PdfPageFormat.mm),
+        pageFormat: PdfPageFormat(s.rollWidthMm * PdfPageFormat.mm, double.infinity, marginAll: 4 * PdfPageFormat.mm),
         textDirection: pw.TextDirection.rtl,
         theme: theme,
         build: (c) => pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.stretch, children: [
-          pw.Center(child: _text(_business, style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold))),
-          if (phone.isNotEmpty) pw.Center(child: _text(faDigits(phone), style: const pw.TextStyle(fontSize: 9))),
+          pw.Center(child: _text(_business, size: 14, bold: true)),
+          if (phone.isNotEmpty) pw.Center(child: _text(faDigits(phone), size: 9)),
           pw.SizedBox(height: 4),
           pw.Divider(thickness: 0.6),
-          _text('${info.label} ${faDigits('${inv.number}')}', style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold)),
-          _text('تاریخ: ${jalaliText(inv.date)}', style: const pw.TextStyle(fontSize: 9)),
-          if (party != null) _text('${info.partyLabel}: ${party.name}', style: const pw.TextStyle(fontSize: 9)),
+          _text('${info.label} ${faDigits('${inv.number}')}', size: 11, bold: true),
+          _text('تاریخ: ${jalaliText(inv.date)}', size: 9),
+          if (party != null) _text('${info.partyLabel}: ${party.name}', size: 9),
           pw.Divider(thickness: 0.6),
           for (final it in items)
             pw.Padding(
               padding: const pw.EdgeInsets.symmetric(vertical: 2),
               child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-                _text(it.title, style: const pw.TextStyle(fontSize: 9)),
+                _text(it.title, size: 9),
                 pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [
-                  _text('${_qty(it.qty)} × ${money(it.unitPrice)}', style: const pw.TextStyle(fontSize: 8)),
-                  _text(money(it.total), style: const pw.TextStyle(fontSize: 9)),
+                  _text('${_qty(it.qty)} × ${money(it.unitPrice)}', size: 8),
+                  _text(money(it.total), size: 9),
                 ]),
               ]),
             ),
           pw.Divider(thickness: 0.6),
           for (final t in totals)
             pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [
-              _text(t.$1, style: pw.TextStyle(fontSize: t.$3 ? 10 : 9, fontWeight: t.$3 ? pw.FontWeight.bold : null)),
-              _text('${t.$2} $cur', style: pw.TextStyle(fontSize: t.$3 ? 10 : 9, fontWeight: t.$3 ? pw.FontWeight.bold : null)),
+              _text(t.$1, size: t.$3 ? 10 : 9, bold: t.$3),
+              _text('${t.$2} $cur', size: t.$3 ? 10 : 9, bold: t.$3),
             ]),
           if (footer.isNotEmpty) ...[
             pw.SizedBox(height: 8),
-            pw.Center(child: _text(footer, style: const pw.TextStyle(fontSize: 8), textAlign: pw.TextAlign.center)),
+            pw.Center(child: _text(footer, size: 8, align: pw.TextAlign.center)),
           ],
         ]),
       ));
       return doc.save();
     }
 
+    final fmt = format ?? s.format;
+    final usable = fmt.width - 2 * s.marginMm * PdfPageFormat.mm;
+    final narrow = usable < 400; // A5 portrait: stack the note above the totals
+    final totalsBox = pw.Container(
+      width: narrow ? double.infinity : (usable * 0.42).clamp(190, 240).toDouble(),
+      decoration: pw.BoxDecoration(border: pw.Border.all(color: _line), borderRadius: pw.BorderRadius.circular(6)),
+      child: pw.Column(children: [
+        for (final t in totals)
+          pw.Container(
+            color: t.$3 ? _soft : null,
+            padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            child: pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [
+              _text(t.$1, bold: t.$3),
+              _text('${t.$2} $cur', bold: t.$3),
+            ]),
+          ),
+      ]),
+    );
+    final noteBox = inv.note.isEmpty
+        ? null
+        : pw.Container(
+            padding: const pw.EdgeInsets.all(8),
+            decoration: pw.BoxDecoration(border: pw.Border.all(color: _line), borderRadius: pw.BorderRadius.circular(6)),
+            child: _text('توضیحات: ${inv.note}', size: 9),
+          );
+
     doc.addPage(pw.MultiPage(
-      pageFormat: PdfPageFormat.a4,
-      margin: const pw.EdgeInsets.all(32),
+      pageFormat: fmt,
+      margin: _margin,
       textDirection: pw.TextDirection.rtl,
       theme: theme,
-      footer: (c) => pw.Align(
-        alignment: pw.Alignment.center,
-        child: _text('صفحه ${faDigits('${c.pageNumber}')} از ${faDigits('${c.pagesCount}')}',
-            style: pw.TextStyle(fontSize: 8, color: PdfColors.grey600)),
-      ),
+      footer: _footer,
       build: (c) => [
-        // Header: business on the start side, invoice title on the end side.
         pw.Container(
-          padding: const pw.EdgeInsets.all(14),
+          padding: const pw.EdgeInsets.all(12),
           decoration: pw.BoxDecoration(color: _accent, borderRadius: pw.BorderRadius.circular(8)),
-          child: pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [
-            pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-              _text(_business, style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold, color: PdfColors.white)),
-              if (address.isNotEmpty) _text(address, style: const pw.TextStyle(fontSize: 9, color: PdfColors.white)),
-              if (phone.isNotEmpty) _text('تلفن: ${faDigits(phone)}', style: const pw.TextStyle(fontSize: 9, color: PdfColors.white)),
-              if (taxId.isNotEmpty) _text('شناسه اقتصادی: ${faDigits(taxId)}', style: const pw.TextStyle(fontSize: 9, color: PdfColors.white)),
-            ]),
+          child: pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+            pw.Expanded(
+              child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+                _text(_business, size: 17, bold: true, color: PdfColors.white),
+                if (address.isNotEmpty) _text(address, size: 9, color: PdfColors.white),
+                if (phone.isNotEmpty) _text('تلفن: ${faDigits(phone)}', size: 9, color: PdfColors.white),
+                if (taxId.isNotEmpty) _text('شناسه اقتصادی: ${faDigits(taxId)}', size: 9, color: PdfColors.white),
+              ]),
+            ),
             pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.end, children: [
-              _text(info.label, style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold, color: PdfColors.white)),
-              _text('شماره: ${faDigits('${inv.number}')}', style: const pw.TextStyle(fontSize: 10, color: PdfColors.white)),
-              _text('تاریخ: ${jalaliText(inv.date)}', style: const pw.TextStyle(fontSize: 10, color: PdfColors.white)),
+              _text(info.label, size: 17, bold: true, color: PdfColors.white),
+              _text('شماره: ${faDigits('${inv.number}')}', color: PdfColors.white),
+              _text('تاریخ: ${jalaliText(inv.date)}', color: PdfColors.white),
             ]),
           ]),
         ),
-        pw.SizedBox(height: 12),
+        pw.SizedBox(height: 10),
         pw.Container(
           width: double.infinity,
-          padding: const pw.EdgeInsets.all(10),
+          padding: const pw.EdgeInsets.all(8),
           decoration: pw.BoxDecoration(border: pw.Border.all(color: _line), borderRadius: pw.BorderRadius.circular(6)),
           child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-            _text('${info.partyLabel}: ${party?.name ?? '—'}', style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold)),
-            if ((party?.phone ?? '').isNotEmpty) _text('تلفن: ${faDigits(party!.phone)}', style: const pw.TextStyle(fontSize: 9)),
+            _text('${info.partyLabel}: ${party?.name ?? '—'}', size: 11, bold: true),
+            if ((party?.phone ?? '').isNotEmpty) _text('تلفن: ${faDigits(party!.phone)}', size: 9),
           ]),
         ),
-        pw.SizedBox(height: 12),
+        pw.SizedBox(height: 10),
         pw.Table(
           border: pw.TableBorder.all(color: _line, width: 0.6),
           columnWidths: _widths(const [
@@ -167,192 +309,41 @@ class PdfDocs {
           ]),
           children: [
             _row([
-              _cell('ردیف', bold: true, align: pw.TextAlign.center),
+              _cell('ردیف', bold: true, col: Col.center),
               _cell('شرح کالا / خدمات', bold: true),
-              _cell('تعداد', bold: true, align: pw.TextAlign.center),
-              _cell('قیمت واحد', bold: true, align: pw.TextAlign.left),
-              _cell('مبلغ', bold: true, align: pw.TextAlign.left),
-            ], background: _soft),
+              _cell('تعداد', bold: true, col: Col.center),
+              _cell('قیمت واحد', bold: true, col: Col.number),
+              _cell('مبلغ', bold: true, col: Col.number),
+            ], background: _soft, repeat: true),
             for (var i = 0; i < items.length; i++)
               _row([
-                _cell(faDigits('${i + 1}'), align: pw.TextAlign.center),
+                _cell(faDigits('${i + 1}'), col: Col.center),
                 _cell(items[i].title),
-                _cell(_qty(items[i].qty), align: pw.TextAlign.center),
-                _cell(money(items[i].unitPrice), align: pw.TextAlign.left),
-                _cell(money(items[i].total), align: pw.TextAlign.left),
+                _cell(_qty(items[i].qty), col: Col.center),
+                _cell(money(items[i].unitPrice), col: Col.number),
+                _cell(money(items[i].total), col: Col.number),
               ]),
           ],
         ),
-        pw.SizedBox(height: 12),
-        pw.Row(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-          pw.Expanded(
-            child: inv.note.isEmpty
-                ? pw.SizedBox()
-                : pw.Container(
-                    padding: const pw.EdgeInsets.all(8),
-                    decoration: pw.BoxDecoration(border: pw.Border.all(color: _line), borderRadius: pw.BorderRadius.circular(6)),
-                    child: _text('توضیحات: ${inv.note}', style: const pw.TextStyle(fontSize: 9)),
-                  ),
-          ),
-          pw.SizedBox(width: 16),
-          pw.Container(
-            width: 220,
-            decoration: pw.BoxDecoration(border: pw.Border.all(color: _line), borderRadius: pw.BorderRadius.circular(6)),
-            child: pw.Column(children: [
-              for (final t in totals)
-                pw.Container(
-                  color: t.$3 ? _soft : null,
-                  padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                  child: pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [
-                    _text(t.$1, style: pw.TextStyle(fontSize: 10, fontWeight: t.$3 ? pw.FontWeight.bold : null)),
-                    _text('${t.$2} $cur', style: pw.TextStyle(fontSize: 10, fontWeight: t.$3 ? pw.FontWeight.bold : null)),
-                  ]),
-                ),
-            ]),
-          ),
-        ]),
-        pw.SizedBox(height: 40),
+        pw.SizedBox(height: 10),
+        if (narrow) ...[
+          if (noteBox != null) ...[noteBox, pw.SizedBox(height: 8)],
+          totalsBox,
+        ] else
+          pw.Row(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+            pw.Expanded(child: noteBox ?? pw.SizedBox()),
+            pw.SizedBox(width: 14),
+            totalsBox,
+          ]),
+        pw.SizedBox(height: 30),
         pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceAround, children: [
-          _text(inv.kind.startsWith('sale') ? 'امضای فروشنده' : 'امضای خریدار', style: const pw.TextStyle(fontSize: 10)),
-          _text(inv.kind.startsWith('sale') ? 'امضای خریدار' : 'امضای فروشنده', style: const pw.TextStyle(fontSize: 10)),
+          _text(inv.kind.startsWith('sale') ? 'امضای فروشنده' : 'امضای خریدار'),
+          _text(inv.kind.startsWith('sale') ? 'امضای خریدار' : 'امضای فروشنده'),
         ]),
         if (footer.isNotEmpty) ...[
-          pw.SizedBox(height: 24),
-          pw.Center(child: _text(footer, style: pw.TextStyle(fontSize: 9, color: PdfColors.grey700))),
+          pw.SizedBox(height: 18),
+          pw.Center(child: _text(footer, size: 9, color: PdfColors.grey700)),
         ],
-      ],
-    ));
-    return doc.save();
-  }
-
-  /// Chronological statement (invoices and payments) with a running balance.
-  Future<Uint8List> statement(Party party) async {
-    final invoices = await repo.invoices(partyId: party.id);
-    final txs = await repo.transactions(partyId: party.id);
-    final rows = <(String, String, String, int)>[]; // date, description, kind, signed amount (+ they owe)
-    for (final i in invoices) {
-      rows.add((i.date, '${i.info.label} ${faDigits('${i.number}')}', 'inv', i.info.partyOwesUs ? i.total : -i.total));
-    }
-    for (final t in txs) {
-      rows.add((t.date, '${t.kind == 'receipt' ? 'دریافت' : 'پرداخت'}${t.description.isEmpty ? '' : ' - ${t.description}'}', 'tx',
-          t.kind == 'payment' ? t.amount : -t.amount));
-    }
-    rows.sort((a, b) => a.$1.compareTo(b.$1));
-
-    final doc = pw.Document(title: 'صورت‌حساب ${party.name}', author: _business);
-    final theme = await _theme();
-    var running = 0;
-    final body = <pw.TableRow>[];
-    for (final r in rows) {
-      running += r.$4;
-      body.add(_row([
-        _cell(jalaliText(r.$1), align: pw.TextAlign.center),
-        _cell(r.$2),
-        _cell(r.$4 > 0 ? money(r.$4) : '', align: pw.TextAlign.left),
-        _cell(r.$4 < 0 ? money(-r.$4) : '', align: pw.TextAlign.left),
-        _cell(money(running), align: pw.TextAlign.left),
-      ]));
-    }
-    doc.addPage(pw.MultiPage(
-      pageFormat: PdfPageFormat.a4,
-      margin: const pw.EdgeInsets.all(32),
-      textDirection: pw.TextDirection.rtl,
-      theme: theme,
-      build: (c) => [
-        _text(_business, style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
-        _text('صورت‌حساب ${party.name}', style: pw.TextStyle(fontSize: 14, color: _accent, fontWeight: pw.FontWeight.bold)),
-        _text('تاریخ گزارش: ${jalaliText(todayIso())}', style: const pw.TextStyle(fontSize: 9)),
-        pw.SizedBox(height: 10),
-        pw.Table(
-          border: pw.TableBorder.all(color: _line, width: 0.6),
-          columnWidths: _widths(const [
-            pw.FlexColumnWidth(1.4),
-            pw.FlexColumnWidth(3.4),
-            pw.FlexColumnWidth(1.6),
-            pw.FlexColumnWidth(1.6),
-            pw.FlexColumnWidth(1.8),
-          ]),
-          children: [
-            _row([
-              _cell('تاریخ', bold: true, align: pw.TextAlign.center),
-              _cell('شرح', bold: true),
-              _cell('بدهکار', bold: true, align: pw.TextAlign.left),
-              _cell('بستانکار', bold: true, align: pw.TextAlign.left),
-              _cell('مانده', bold: true, align: pw.TextAlign.left),
-            ], background: _soft),
-            ...body,
-          ],
-        ),
-        pw.SizedBox(height: 10),
-        _text(
-          running == 0
-              ? 'حساب تسویه است.'
-              : (running > 0
-                  ? 'مانده: ${money(running)} $currencyLabel بدهکار به ما'
-                  : 'مانده: ${money(-running)} $currencyLabel بستانکار از ما'),
-          style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold),
-        ),
-      ],
-    ));
-    return doc.save();
-  }
-
-  /// Sales of one product per party for a period.
-  Future<Uint8List> productBuyers(Product product, List<PartySales> rows, String periodLabel) async {
-    final doc = pw.Document(title: 'فروش ${product.name} به تفکیک اشخاص', author: _business);
-    final theme = await _theme();
-    final totalRevenue = rows.fold<int>(0, (a, r) => a + r.revenue);
-    final totalQty = rows.fold<double>(0, (a, r) => a + r.qty);
-    doc.addPage(pw.MultiPage(
-      pageFormat: PdfPageFormat.a4,
-      margin: const pw.EdgeInsets.all(32),
-      textDirection: pw.TextDirection.rtl,
-      theme: theme,
-      build: (c) => [
-        _text(_business, style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
-        _text('فروش «${product.name}» به تفکیک اشخاص', style: pw.TextStyle(fontSize: 14, color: _accent, fontWeight: pw.FontWeight.bold)),
-        _text('بازه: $periodLabel • تاریخ گزارش: ${jalaliText(todayIso())}', style: const pw.TextStyle(fontSize: 9)),
-        pw.SizedBox(height: 10),
-        pw.Table(
-          border: pw.TableBorder.all(color: _line, width: 0.6),
-          columnWidths: _widths(const [
-            pw.FixedColumnWidth(40),
-            pw.FlexColumnWidth(3),
-            pw.FlexColumnWidth(1.4),
-            pw.FlexColumnWidth(1),
-            pw.FlexColumnWidth(1.8),
-            pw.FlexColumnWidth(1),
-          ]),
-          children: [
-            _row([
-              _cell('ردیف', bold: true, align: pw.TextAlign.center),
-              _cell('نام شخص', bold: true),
-              _cell('تعداد (${product.unit})', bold: true, align: pw.TextAlign.left),
-              _cell('فاکتور', bold: true, align: pw.TextAlign.center),
-              _cell('مبلغ فروش', bold: true, align: pw.TextAlign.left),
-              _cell('سهم', bold: true, align: pw.TextAlign.left),
-            ], background: _soft),
-            for (var i = 0; i < rows.length; i++)
-              _row([
-                _cell(faDigits('${i + 1}'), align: pw.TextAlign.center),
-                _cell(rows[i].name),
-                _cell(_qty(rows[i].qty), align: pw.TextAlign.left),
-                _cell(faDigits('${rows[i].invoices}'), align: pw.TextAlign.center),
-                _cell(money(rows[i].revenue), align: pw.TextAlign.left),
-                _cell(totalRevenue > 0 ? '${numText(rows[i].revenue * 100 / totalRevenue, 1)}٪' : '', align: pw.TextAlign.left),
-              ]),
-            _row([
-              _cell('', align: pw.TextAlign.center),
-              _cell('جمع کل', bold: true),
-              _cell(_qty(totalQty), bold: true, align: pw.TextAlign.left),
-              _cell(faDigits('${rows.fold<int>(0, (a, r) => a + r.invoices)}'), bold: true, align: pw.TextAlign.center),
-              _cell(money(totalRevenue), bold: true, align: pw.TextAlign.left),
-              _cell('', align: pw.TextAlign.left),
-            ], background: _soft),
-          ],
-        ),
-        pw.SizedBox(height: 6),
-        _text('مبالغ بر حسب $currencyLabel؛ برگشت از فروش کسر شده است.', style: const pw.TextStyle(fontSize: 8)),
       ],
     ));
     return doc.save();
@@ -360,9 +351,18 @@ class PdfDocs {
 
   // ---- output -------------------------------------------------------------
 
-  static Future<void> printBytes(Uint8List bytes, String name, {PdfPageFormat? format}) =>
-      Printing.layoutPdf(name: name, onLayout: (_) async => bytes, format: format ?? PdfPageFormat.a4);
+  /// Opens the system print dialog. [build] is called again with the page
+  /// format chosen in the dialog, so switching A4/A5 there re-lays the page.
+  static Future<void> print(Future<Uint8List> Function(PdfPageFormat format) build, String name, PrintSettings settings) =>
+      Printing.layoutPdf(name: name, onLayout: (f) => build(f), format: settings.format);
 
-  static Future<void> shareBytes(Uint8List bytes, String filename) =>
-      Printing.sharePdf(bytes: bytes, filename: filename);
+  /// Thermal receipt: a fixed-width roll, so the dialog must not re-lay it out.
+  static Future<void> printRoll(Uint8List bytes, String name, PrintSettings settings) => Printing.layoutPdf(
+        name: name,
+        onLayout: (_) async => bytes,
+        format: PdfPageFormat(settings.rollWidthMm * PdfPageFormat.mm, double.infinity, marginAll: 4 * PdfPageFormat.mm),
+        dynamicLayout: false,
+      );
+
+  static Future<void> share(Uint8List bytes, String filename) => Printing.sharePdf(bytes: bytes, filename: filename);
 }

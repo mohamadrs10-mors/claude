@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../data/repo.dart';
 import '../util/format.dart';
+import '../print/report_builders.dart';
 import 'common.dart';
+import 'print_dialog.dart';
 
 class AccountsPage extends StatelessWidget {
   const AccountsPage({super.key, required this.repo});
@@ -19,7 +21,7 @@ class AccountsPage extends StatelessWidget {
             body: Constrained(child: ListView(padding: const EdgeInsets.fromLTRB(16, 8, 16, 32), children: [
               StatCard(title: 'جمع موجودی همهٔ حساب‌ها', value: moneyC(total), icon: Icons.account_balance_wallet_outlined, color: amountColor(c, total) == Theme.of(c).hintColor ? Theme.of(c).colorScheme.primary : amountColor(c, total)),
               const SizedBox(height: 16),
-              _header(c, 'حساب‌ها', () => _editAccount(c)),
+              _header(c, 'حساب‌ها', () => _editAccount(c), trailing: PrintButton(repo: repo, doc: () => accountsDoc(accounts))),
               if (accounts.isEmpty) emptyState('هنوز حسابی ندارید. یک صندوق یا حساب بانکی اضافه کنید.'),
               if (accounts.isNotEmpty) Card(child: Column(children: [
               for (final a in accounts)
@@ -49,11 +51,12 @@ class AccountsPage extends StatelessWidget {
         },
       );
 
-  Widget _header(BuildContext c, String t, VoidCallback add) => Padding(
+  Widget _header(BuildContext c, String t, VoidCallback add, {Widget? trailing}) => Padding(
         padding: const EdgeInsets.only(bottom: 8),
         child: Row(children: [
           Text(t, style: Theme.of(c).textTheme.titleMedium),
           const Spacer(),
+          ?trailing,
           IconButton.filledTonal(onPressed: add, icon: const Icon(Icons.add), tooltip: 'افزودن'),
         ]),
       );

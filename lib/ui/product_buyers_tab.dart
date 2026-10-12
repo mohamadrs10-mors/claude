@@ -2,9 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:shamsi_date/shamsi_date.dart';
 
 import '../data/repo.dart';
-import '../print/pdf_docs.dart';
+import '../print/report_builders.dart';
 import '../util/format.dart';
 import 'common.dart';
+import 'print_dialog.dart';
 import 'products_page.dart';
 
 /// Report: total sales of one product, split by the people who bought it.
@@ -126,18 +127,7 @@ class _ProductBuyersTabState extends State<ProductBuyersTab> {
       const SizedBox(height: 12),
       Row(children: [
         Expanded(child: Text('خریداران «${p.name}» • $_periodLabel', style: Theme.of(c).textTheme.titleSmall)),
-        TextButton.icon(
-          onPressed: () async {
-            try {
-              final bytes = await PdfDocs(repo).productBuyers(p, rows, _periodLabel);
-              await PdfDocs.printBytes(bytes, 'فروش ${p.name} به تفکیک اشخاص');
-            } catch (e) {
-              if (c.mounted) toast(c, 'چاپ ممکن نشد: $e');
-            }
-          },
-          icon: const Icon(Icons.print_outlined),
-          label: const Text('چاپ'),
-        ),
+        PrintButton(repo: repo, doc: () => buyersDoc(p, rows, _periodLabel)),
       ]),
       const SizedBox(height: 4),
       Card(

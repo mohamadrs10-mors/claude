@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../data/repo.dart';
 import '../util/format.dart';
+import '../print/report_builders.dart';
 import 'common.dart';
+import 'print_dialog.dart';
 import 'costing_page.dart';
 
 const commonUnits = ['عدد', 'کیلوگرم', 'گرم', 'متر', 'لیتر', 'بسته', 'کارتن', 'جعبه', 'دست', 'جفت', 'ساعت', 'خدمت'];
@@ -40,7 +42,11 @@ class _ProductsPageState extends State<ProductsPage> {
                   Expanded(child: StatCard(title: 'کمبود موجودی', value: faDigits('$low'), icon: Icons.warning_amber_rounded, color: low > 0 ? Colors.orange : Colors.green)),
                 ]),
                 const SizedBox(height: 12),
-                SearchBox(onChanged: (v) => setState(() => q = v), hint: 'جستجوی نام یا کد کالا...'),
+                Row(children: [
+                  Expanded(child: SearchBox(onChanged: (v) => setState(() => q = v), hint: 'جستجوی نام یا کد کالا...')),
+                  const SizedBox(width: 8),
+                  PrintButton(repo: widget.repo, label: 'چاپ موجودی', doc: () => stockDoc(list)),
+                ]),
                 const SizedBox(height: 12),
                 if (list.isEmpty)
                   emptyState(all.isEmpty ? 'هنوز کالایی تعریف نشده است.\nبا دکمهٔ «کالای جدید» شروع کنید.' : 'کالایی پیدا نشد.')

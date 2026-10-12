@@ -2,10 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:shamsi_date/shamsi_date.dart';
 
 import '../data/repo.dart';
-import '../print/pdf_docs.dart';
+import '../print/report_builders.dart';
 import '../util/format.dart';
 import 'common.dart';
 import 'product_buyers_tab.dart';
+import 'print_dialog.dart';
 import 'products_page.dart';
 
 class ReportsPage extends StatefulWidget {
@@ -72,6 +73,10 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
         repo: widget.repo,
         load: () => widget.repo.report(from, to),
         builder: (c, r) => ListView(padding: const EdgeInsets.fromLTRB(16, 4, 16, 32), children: [
+          Align(
+            alignment: AlignmentDirectional.centerEnd,
+            child: PrintButton(repo: widget.repo, doc: () => monthlyDoc(r, '${monthNames[month - 1]} ${faDigits('$year')}')),
+          ),
           Row(children: [
             Expanded(child: StatCard(title: 'دریافتی‌ها', value: moneyC(r.income), icon: Icons.south_west, color: Colors.green.shade700)),
             const SizedBox(width: 12),
@@ -109,6 +114,10 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
           final revenue = sales.fold<int>(0, (a, s) => a + s.revenue);
           final stockValue = products.fold<double>(0, (a, p) => a + (p.stock > 0 ? p.stock * p.buyPrice : 0));
           return ListView(padding: const EdgeInsets.fromLTRB(16, 4, 16, 32), children: [
+            Align(
+              alignment: AlignmentDirectional.centerEnd,
+              child: PrintButton(repo: widget.repo, doc: () => productSalesDoc(sales, products, '${monthNames[month - 1]} ${faDigits('$year')}')),
+            ),
             Row(children: [
               Expanded(child: StatCard(title: 'فروش خالص ماه', value: moneyC(revenue), icon: Icons.point_of_sale, color: Colors.green.shade700)),
               const SizedBox(width: 12),
@@ -154,17 +163,15 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
                             title: Text(p.name),
                             subtitle: p.phone.isEmpty ? null : Text(faDigits(p.phone)),
                             trailing: Text(money(p.balance.abs()), style: TextStyle(color: color, fontWeight: FontWeight.w700)),
-                            onTap: () async {
-                              try {
-                                await PdfDocs.printBytes(await PdfDocs(widget.repo).statement(p), 'صورت‌حساب ${p.name}');
-                              } catch (e) {
-                                if (c.mounted) toast(c, 'چاپ ممکن نشد: $e');
-                              }
-                            },
+                            onTap: () => showStatementPrint(c, widget.repo, p),
                           ),
                       ]),
               );
-          return ListView(padding: const EdgeInsets.fromLTRB(16, 12, 16, 32), children: [
+          return ListView(padding: const EdgeInsets.fromLTRB(16, 4, 16, 32), children: [
+            Align(
+              alignment: AlignmentDirectional.centerEnd,
+              child: PrintButton(repo: widget.repo, doc: () => partyBalancesDoc(parties)),
+            ),
             group('بدهکاران (طلب شما)', debtors, Colors.green.shade700),
             const SizedBox(height: 16),
             group('بستانکاران (بدهی شما)', creditors, Theme.of(c).colorScheme.error),

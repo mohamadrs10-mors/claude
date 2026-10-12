@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../data/repo.dart';
 import '../util/format.dart';
+import '../print/report_builders.dart';
 import 'common.dart';
+import 'print_dialog.dart';
 
 class TransactionsPage extends StatefulWidget {
   const TransactionsPage({super.key, required this.repo});
@@ -29,15 +31,28 @@ class _TransactionsPageState extends State<TransactionsPage> {
         body: Constrained(child: Column(children: [
           Padding(
             padding: const EdgeInsets.all(16),
-            child: DropdownButtonFormField<String?>(
-              initialValue: accountId,
-              decoration: const InputDecoration(labelText: 'فیلتر حساب', border: OutlineInputBorder()),
-              items: [
-                const DropdownMenuItem(value: null, child: Text('همهٔ حساب‌ها')),
-                for (final e in d.accounts.entries) DropdownMenuItem(value: e.key, child: Text(e.value)),
-              ],
-              onChanged: (v) => setState(() => accountId = v),
-            ),
+            child: Row(children: [
+              Expanded(
+                child: DropdownButtonFormField<String?>(
+                  initialValue: accountId,
+                  decoration: const InputDecoration(labelText: 'فیلتر حساب', border: OutlineInputBorder()),
+                  items: [
+                    const DropdownMenuItem(value: null, child: Text('همهٔ حساب‌ها')),
+                    for (final e in d.accounts.entries) DropdownMenuItem(value: e.key, child: Text(e.value)),
+                  ],
+                  onChanged: (v) => setState(() => accountId = v),
+                ),
+              ),
+              const SizedBox(width: 8),
+              PrintButton(
+                repo: repo,
+                doc: () => transactionsDoc(d.txs,
+                    accounts: d.accounts,
+                    parties: d.parties,
+                    categories: d.cats,
+                    filter: accountId == null ? 'همهٔ حساب‌ها' : 'حساب: ${d.accounts[accountId] ?? ''}'),
+              ),
+            ]),
           ),
           Expanded(
             child: d.txs.isEmpty

@@ -7,7 +7,10 @@ import 'package:flutter/material.dart';
 import '../data/repo.dart';
 import '../util/format.dart';
 import 'app_theme.dart';
+import '../print/print_settings.dart';
+import '../print/report_doc.dart';
 import 'common.dart';
+import 'print_dialog.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key, required this.repo, required this.theme});
@@ -196,6 +199,105 @@ class _SettingsPageState extends State<SettingsPage> {
               Text('این اطلاعات با دستگاه دیگر هم همگام می‌شود.', style: Theme.of(context).textTheme.bodySmall),
             ])),
             gap(16),
+            ListenableBuilder(
+              listenable: repo,
+              builder: (context, _) {
+                final ps = repo.printSettings;
+                return Section(title: 'تنظیمات چاپ', child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text('اندازهٔ کاغذ'),
+                  const SizedBox(height: 8),
+                  SegmentedButton<String>(
+                    segments: [for (final e in PrintSettings.papers.entries) ButtonSegment(value: e.key, label: Text(e.value))],
+                    selected: {ps.paper},
+                    onSelectionChanged: (v) => repo.setPrint(ps.copyWith(paper: v.first)),
+                  ),
+                  gap(16),
+                  const Text('جهت صفحه'),
+                  const SizedBox(height: 8),
+                  SegmentedButton<bool>(
+                    segments: const [
+                      ButtonSegment(value: false, icon: Icon(Icons.crop_portrait), label: Text('عمودی')),
+                      ButtonSegment(value: true, icon: Icon(Icons.crop_landscape), label: Text('افقی')),
+                    ],
+                    selected: {ps.landscape},
+                    onSelectionChanged: (v) => repo.setPrint(ps.copyWith(landscape: v.first)),
+                  ),
+                  gap(8),
+                  Row(children: [
+                    const Text('حاشیه'),
+                    Expanded(
+                      child: Slider(
+                        value: ps.marginMm,
+                        min: 0,
+                        max: 30,
+                        divisions: 30,
+                        label: '${faDigits('${ps.marginMm.round()}')} میلی‌متر',
+                        onChanged: (v) => repo.setPrint(ps.copyWith(marginMm: v)),
+                      ),
+                    ),
+                    SizedBox(width: 70, child: Text('${faDigits('${ps.marginMm.round()}')} mm', textDirection: TextDirection.ltr)),
+                  ]),
+                  Row(children: [
+                    const Text('اندازهٔ نوشته'),
+                    Expanded(
+                      child: Slider(
+                        value: ps.fontScale,
+                        min: 0.7,
+                        max: 1.4,
+                        divisions: 14,
+                        label: faDigits('${(ps.fontScale * 100).round()}٪'),
+                        onChanged: (v) => repo.setPrint(ps.copyWith(fontScale: double.parse(v.toStringAsFixed(2)))),
+                      ),
+                    ),
+                    SizedBox(width: 70, child: Text(faDigits('${(ps.fontScale * 100).round()}٪'))),
+                  ]),
+                  gap(8),
+                  const Text('پهنای رسید حرارتی'),
+                  const SizedBox(height: 8),
+                  SegmentedButton<int>(
+                    segments: const [
+                      ButtonSegment(value: 58, label: Text('۵۸ میلی‌متر')),
+                      ButtonSegment(value: 80, label: Text('۸۰ میلی‌متر')),
+                    ],
+                    selected: {ps.rollWidthMm},
+                    onSelectionChanged: (v) => repo.setPrint(ps.copyWith(rollWidthMm: v.first)),
+                  ),
+                  gap(16),
+                  Wrap(spacing: 10, runSpacing: 10, children: [
+                    FilledButton.tonalIcon(
+                      icon: const Icon(Icons.print_outlined),
+                      label: const Text('چاپ صفحهٔ آزمایشی'),
+                      onPressed: () => printReport(
+                        context,
+                        repo,
+                        ReportDoc(
+                          title: 'صفحهٔ آزمایشی چاپ',
+                          subtitle: 'کاغذ ${PrintSettings.papers[ps.paper]} • ${ps.landscape ? 'افقی' : 'عمودی'} • حاشیه ${faDigits('${ps.marginMm.round()}')} میلی‌متر',
+                          summary: [('نمونه مبلغ', moneyC(1234567)), ('تاریخ امروز', jalaliText(todayIso()))],
+                          tables: [
+                            ReportTable(
+                              headers: const ['ردیف', 'شرح', 'تعداد', 'مبلغ'],
+                              cols: const [Col.center, Col.text, Col.number, Col.number],
+                              flex: const [0.7, 4, 1.2, 2],
+                              rows: [for (var i = 1; i <= 8; i++) [faDigits('$i'), 'نمونهٔ ردیف شمارهٔ ${faDigits('$i')}', faDigits('$i'), money(i * 125000)]],
+                              totals: ['', 'جمع', faDigits('36'), money(36 * 125000)],
+                            ),
+                          ],
+                          footnote: 'اگر لبه‌های جدول بریده شد، حاشیه را بیشتر کنید.',
+                        ),
+                      ),
+                    ),
+                  ]),
+                  const SizedBox(height: 6),
+                  Text(
+                    'اندازهٔ کاغذ و جهت را هنگام چاپ هم می‌توانید عوض کنید. چاپگر و تعداد نسخه را از پنجرهٔ چاپ سیستم انتخاب کنید. '
+                    'این تنظیمات فقط روی همین دستگاه ذخیره می‌شود.',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ]));
+              },
+            ),
+            gap(16),
             Section(title: 'پشتیبان‌گیری', child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               const Text('از همهٔ اطلاعات یک فایل پشتیبان بگیرید و در جای امن نگه دارید. بازیابی، اطلاعات فایل را با اطلاعات فعلی ادغام می‌کند (مورد جدیدتر می‌ماند).'),
               gap(),
@@ -205,7 +307,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ]),
             ])),
             gap(16),
-            const Section(title: 'دربارهٔ برنامه', child: Text('حسابداری ساده • نسخهٔ ۱٫۲\nفونت وزیرمتن (مجوز OFL)')),
+            const Section(title: 'دربارهٔ برنامه', child: Text('حسابداری ساده • نسخهٔ ۱٫۳\nفونت وزیرمتن (مجوز OFL)')),
           ]),
         ),
       );
