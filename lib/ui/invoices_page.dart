@@ -365,7 +365,7 @@ class _InvoiceEditPageState extends State<InvoiceEditPage> {
     l.productId = p.id;
     l.title.text = p.name;
     final price = kind.startsWith('purchase') ? p.buyPrice : p.salePrice;
-    if (price > 0) l.price.text = '$price';
+    if (price > 0) l.price.text = money(price);
     setState(() {});
   }
 

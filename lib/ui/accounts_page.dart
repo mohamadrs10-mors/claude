@@ -89,7 +89,7 @@ class AccountsPage extends StatelessWidget {
                 onSelectionChanged: (s) => set(() => kind = s.first),
               ),
               gap(),
-              AmountField(controller: opening, label: 'موجودی اولیه'),
+              AmountField(controller: opening, label: 'موجودی اولیه', negative: true),
             ]),
           ),
           actions: [

@@ -3,6 +3,7 @@ import 'package:shamsi_date/shamsi_date.dart';
 
 import '../data/repo.dart';
 import '../util/format.dart';
+import 'thousands_formatter.dart';
 
 /// Rebuilds with fresh data whenever the repository changes.
 class RepoBuilder<T> extends StatefulWidget {
@@ -131,19 +132,58 @@ class _JalaliPickerState extends State<_JalaliPicker> {
       );
 }
 
-/// Digits-only money input that tolerates Persian digits.
-class AmountField extends StatelessWidget {
-  const AmountField({super.key, required this.controller, this.label = 'مبلغ', this.validator});
+/// Money input with live thousands separators (۱.۲۵۰.۰۰۰) and the currency
+/// name as a suffix. Read its value with `parseAmount` (whole amounts) or
+/// `parseMoneyNum` (when [decimal] is on).
+class AmountField extends StatefulWidget {
+  const AmountField({
+    super.key,
+    required this.controller,
+    this.label = 'مبلغ',
+    this.validator,
+    this.decimal = false,
+    this.negative = false,
+    this.suffix,
+    this.helper,
+    this.dense = false,
+  });
+
   final TextEditingController controller;
   final String label;
   final String? Function(String?)? validator;
+  final bool decimal, negative, dense;
+
+  /// Suffix text; the currency name by default.
+  final String? suffix;
+  final String? helper;
+
+  @override
+  State<AmountField> createState() => _AmountFieldState();
+}
+
+class _AmountFieldState extends State<AmountField> {
+  late final ThousandsFormatter formatter = ThousandsFormatter(decimal: widget.decimal, negative: widget.negative);
+
+  @override
+  void initState() {
+    super.initState();
+    // Values put into the controller by the screen are plain numbers.
+    final t = widget.controller.text;
+    if (t.isNotEmpty) widget.controller.text = formatter.format(t);
+  }
 
   @override
   Widget build(BuildContext context) => TextFormField(
-        controller: controller,
-        keyboardType: TextInputType.number,
-        decoration: InputDecoration(labelText: label, border: const OutlineInputBorder()),
-        validator: validator,
+        controller: widget.controller,
+        keyboardType: TextInputType.numberWithOptions(decimal: widget.decimal, signed: widget.negative),
+        inputFormatters: [formatter],
+        decoration: InputDecoration(
+          labelText: widget.label,
+          helperText: widget.helper,
+          suffixText: widget.suffix ?? currencyLabel,
+          isDense: widget.dense,
+        ),
+        validator: widget.validator,
       );
 }
 

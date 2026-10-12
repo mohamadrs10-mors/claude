@@ -25,7 +25,6 @@ class _SettingsPageState extends State<SettingsPage> {
     for (final k in ['business_name', 'business_phone', 'business_address', 'business_tax_id', 'invoice_footer', 'default_tax'])
       k: TextEditingController(text: widget.repo.setting(k)),
   };
-  String currency = 'تومان';
 
   Repo get repo => widget.repo;
   AppTheme get theme => widget.theme;
@@ -33,7 +32,57 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   void initState() {
     super.initState();
-    currency = repo.setting('currency', 'تومان');
+  }
+
+
+  Future<void> _changeCurrency(String unit) async {
+    if (unit == currencyLabel) return;
+    var convert = true;
+    final factor = unit == 'ریال' ? '۱۰ برابر' : 'بر ۱۰ تقسیم';
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dc) => StatefulBuilder(
+        builder: (dc, set) => AlertDialog(
+          title: Text('تغییر واحد پول به «$unit»'),
+          content: SizedBox(
+            width: 440,
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              RadioGroup<bool>(
+                groupValue: convert,
+                onChanged: (v) => set(() => convert = v ?? true),
+                child: Column(children: [
+                  RadioListTile<bool>(
+                    contentPadding: EdgeInsets.zero,
+                    value: true,
+                    title: const Text('مبالغ را هم تبدیل کن'),
+                    subtitle: Text('مبلغ همهٔ حساب‌ها، تراکنش‌ها، فاکتورها، کالاها، چک‌ها و برگه‌های هزینه $factor می‌شود.'),
+                  ),
+                  const RadioListTile<bool>(
+                    contentPadding: EdgeInsets.zero,
+                    value: false,
+                    title: Text('فقط نام واحد عوض شود'),
+                    subtitle: Text('عددها همان می‌ماند؛ مثلاً وقتی از اول به همین واحد وارد کرده‌اید.'),
+                  ),
+                ]),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'قبل از تبدیل پشتیبان بگیرید. فرمول‌های دلخواه در بخش قیمت‌گذاری اگر عدد ثابت دارند خودکار تغییر نمی‌کنند. '
+                'تبدیل به دستگاه دیگر هم همگام می‌شود، پس همان‌جا دوباره تبدیل نکنید.',
+                style: Theme.of(dc).textTheme.bodySmall,
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dc, false), child: const Text('انصراف')),
+            FilledButton(onPressed: () => Navigator.pop(dc, true), child: const Text('اعمال')),
+          ],
+        ),
+      ),
+    );
+    if (ok != true) return;
+    await repo.setCurrency(unit, convert: convert);
+    if (mounted) toast(context, 'واحد پول «$unit» شد.');
   }
 
   Future<void> _saveBusiness() async {
@@ -153,6 +202,38 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             ])),
             gap(16),
+            Section(title: 'واحد پول و نمایش مبلغ', child: ListenableBuilder(
+              listenable: repo,
+              builder: (context, _) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Text('واحد پول'),
+                const SizedBox(height: 8),
+                SegmentedButton<String>(
+                  segments: const [
+                    ButtonSegment(value: 'تومان', label: Text('تومان')),
+                    ButtonSegment(value: 'ریال', label: Text('ریال')),
+                  ],
+                  selected: {currencyLabel},
+                  onSelectionChanged: (v) => _changeCurrency(v.first),
+                ),
+                gap(16),
+                const Text('جداکنندهٔ هزارگان'),
+                const SizedBox(height: 8),
+                SegmentedButton<String>(
+                  segments: [
+                    ButtonSegment(value: '.', label: Text('نقطه   ۱.۲۳۴.۵۶۷')),
+                    ButtonSegment(value: ',', label: Text('ویرگول   ۱,۲۳۴,۵۶۷')),
+                  ],
+                  selected: {thousandsSep},
+                  onSelectionChanged: (v) => repo.setThousandsSep(v.first),
+                ),
+                gap(12),
+                Text('نمونه: ${moneyC(1234567)}', style: Theme.of(context).textTheme.titleSmall),
+                const SizedBox(height: 4),
+                Text('در همهٔ فیلدهای مبلغ، هنگام تایپ هر سه رقم با این نشانه جدا می‌شود. این تنظیمات با دستگاه دیگر هم همگام می‌شود.',
+                    style: Theme.of(context).textTheme.bodySmall),
+              ]),
+            )),
+            gap(16),
             Section(title: 'اطلاعات کسب‌وکار (روی فاکتور چاپ می‌شود)', child: Column(children: [
               TextField(controller: ctl['business_name'], decoration: const InputDecoration(labelText: 'نام فروشگاه / شرکت')),
               gap(),
@@ -172,21 +253,6 @@ class _SettingsPageState extends State<SettingsPage> {
                     controller: ctl['default_tax'],
                     keyboardType: TextInputType.number,
                     decoration: const InputDecoration(labelText: 'مالیات پیش‌فرض فاکتور (درصد)', helperText: '۰ یعنی بدون مالیات'),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: DropdownButtonFormField<String>(
-                    initialValue: currency,
-                    decoration: const InputDecoration(labelText: 'واحد پول'),
-                    items: const [
-                      DropdownMenuItem(value: 'تومان', child: Text('تومان')),
-                      DropdownMenuItem(value: 'ریال', child: Text('ریال')),
-                    ],
-                    onChanged: (v) async {
-                      currency = v!;
-                      await repo.setSetting('currency', v);
-                    },
                   ),
                 ),
               ]),
@@ -307,7 +373,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ]),
             ])),
             gap(16),
-            const Section(title: 'دربارهٔ برنامه', child: Text('حسابداری ساده • نسخهٔ ۱٫۳\nفونت وزیرمتن (مجوز OFL)')),
+            const Section(title: 'دربارهٔ برنامه', child: Text('حسابداری ساده • نسخهٔ ۱٫۴\nفونت وزیرمتن (مجوز OFL)')),
           ]),
         ),
       );

@@ -24,11 +24,44 @@ int parseAmount(String s) =>
 /// Display name of the currency (changeable in settings).
 String currencyLabel = 'تومان';
 
+/// Character that separates every three digits of an amount: `.` or `,`
+/// (a synced setting).
+String thousandsSep = '.';
+
 final _num = NumberFormat('#,###', 'en');
 
-String money(num v) => faDigits('${v < 0 ? '-' : ''}${_num.format(v.abs())}');
+/// Groups a string of Latin digits in threes from the right.
+String groupDigits(String digits) => _num.format(int.tryParse(digits) ?? 0).replaceAll(',', thousandsSep);
 
-/// Amount with the currency name, e.g. "۱٬۲۰۰ تومان".
+String money(num v) => faDigits('${v < 0 ? '-' : ''}${_num.format(v.abs()).replaceAll(',', thousandsSep)}');
+
+/// A number typed into a money field, e.g. "۱.۲۵۰.۵" -> 1250.5. Which character
+/// is the thousands separator depends on [thousandsSep]; `٫` and `/` are
+/// always decimal marks.
+double parseMoneyNum(String s) {
+  var t = enDigits(s).replaceAll(RegExp(r'\s'), '').replaceAll('٬', '');
+  t = t.replaceAll(thousandsSep == '.' ? RegExp(r'[.,]') : RegExp(','), '');
+  return double.tryParse(t.replaceAll('٫', '.').replaceAll('/', '.')) ?? 0;
+}
+
+/// Text to put into a money field: grouped, Persian digits, `٫` for decimals.
+String inputNum(num v, {int decimals = 4}) {
+  final neg = v < 0;
+  var fixed = v.abs().toStringAsFixed(decimals);
+  if (fixed.contains('.')) fixed = fixed.replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '');
+  final parts = fixed.split('.');
+  return faDigits('${neg ? '-' : ''}${groupDigits(parts[0])}${parts.length > 1 ? '٫${parts[1]}' : ''}');
+}
+
+/// A plain number for fields that hold quantities or percentages: no
+/// grouping, `.` as the decimal mark ("12.5").
+String plainNum(num v, {int decimals = 4}) {
+  var fixed = v.toStringAsFixed(decimals);
+  if (fixed.contains('.')) fixed = fixed.replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '');
+  return fixed;
+}
+
+/// Amount with the currency name, e.g. "۱.۲۰۰ تومان".
 String moneyC(num v) => '${money(v)} $currencyLabel';
 
 const monthNames = [
@@ -65,12 +98,7 @@ double parseNum(String s) {
 
 /// Number for display: whole numbers without decimals, otherwise up to
 /// [digits] decimals, with Persian digits and thousands separators.
-String numText(num v, [int digits = 2]) {
-  if (v == v.roundToDouble()) return money(v.round());
-  final s = v.toStringAsFixed(digits).replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '');
-  final parts = s.split('.');
-  return faDigits('${money(int.parse(parts[0]))}${parts.length > 1 ? '٫${parts[1]}' : ''}');
-}
+String numText(num v, [int digits = 2]) => inputNum(v, decimals: digits);
 
 /// ISO range [start, endExclusive) of a Jalali year.
 (String, String) jalaliYearRange(int year) =>

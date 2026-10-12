@@ -4,12 +4,13 @@ import '../data/costing.dart';
 import '../data/repo.dart';
 import '../util/format.dart';
 import 'common.dart';
+import 'thousands_formatter.dart';
 
 class _LineCtl {
   _LineCtl({String name = '', this.type = 'amount', double value = 0, double rate = 1, this.perUnit = false})
       : name = TextEditingController(text: name),
-        value = TextEditingController(text: value == 0 ? '' : numText(value, 4).replaceAll(',', '')),
-        rate = TextEditingController(text: rate == 1 ? '' : numText(rate, 4).replaceAll(',', ''));
+        value = TextEditingController(text: value == 0 ? '' : (type == 'percent' ? plainNum(value) : inputNum(value))),
+        rate = TextEditingController(text: rate == 1 ? '' : inputNum(rate));
 
   final TextEditingController name, value, rate;
   String type;
@@ -18,8 +19,8 @@ class _LineCtl {
   CostLine toLine() => CostLine(
         name: name.text.trim(),
         type: type,
-        value: parseNum(value.text),
-        rate: rate.text.trim().isEmpty ? 1 : parseNum(rate.text),
+        value: type == 'percent' ? parseNum(value.text) : parseMoneyNum(value.text),
+        rate: rate.text.trim().isEmpty ? 1 : parseMoneyNum(rate.text),
         perUnit: perUnit,
       );
 
@@ -105,8 +106,8 @@ class _CostingPageState extends State<CostingPage> {
     final sheet = product == null ? null : await repo.costSheet(product!.id);
     if (sheet != null) {
       hasSavedSheet = true;
-      batch.text = numText(sheet.batchQty, 4).replaceAll(',', '');
-      waste.text = sheet.wastePercent == 0 ? '' : numText(sheet.wastePercent, 4);
+      batch.text = plainNum(sheet.batchQty);
+      waste.text = sheet.wastePercent == 0 ? '' : plainNum(sheet.wastePercent);
       for (final l in sheet.lines) {
         lines.add(_LineCtl(name: l.name, type: l.type, value: l.value, rate: l.rate, perUnit: l.perUnit));
       }
@@ -143,7 +144,7 @@ class _CostingPageState extends State<CostingPage> {
 
   Widget _content(BuildContext c) {
     final res = computeCost(_sheet);
-    final cost = res.valid && res.unitCost > 0 ? res.unitCost : parseNum(manualCost.text);
+    final cost = res.valid && res.unitCost > 0 ? res.unitCost : parseMoneyNum(manualCost.text);
     final scheme = Theme.of(c).colorScheme;
     return ListView(padding: const EdgeInsets.fromLTRB(16, 8, 16, 48), children: [
       Section(
@@ -221,13 +222,11 @@ class _CostingPageState extends State<CostingPage> {
           ),
           if (res.unitCost == 0) ...[
             const SizedBox(height: 12),
-            TextField(
+            AmountField(
               controller: manualCost,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: 'یا قیمت تمام‌شده را مستقیم وارد کنید',
-                helperText: 'اگر اجزای هزینه خالی است، فرمول‌های پایین از این عدد استفاده می‌کنند',
-              ),
+              decimal: true,
+              label: 'یا قیمت تمام‌شده را مستقیم وارد کنید',
+              helper: 'اگر اجزای هزینه خالی است، فرمول‌های پایین از این عدد استفاده می‌کنند',
             ),
           ],
           if (product != null) ...[
@@ -396,9 +395,9 @@ class _CostingPageState extends State<CostingPage> {
                   title: 'میانگین موزون قیمت (خرید جدید)',
                   help: 'وقتی کالا را با قیمت جدید می‌خرید، میانگین قیمت تمام‌شدهٔ انبار چقدر می‌شود؟ قیمت دسته‌ٔ جدید همین قیمت تمام‌شدهٔ بالاست.',
                   fields: [
-                    _F('موجودی فعلی', numText((product?.stock ?? 0) < 0 ? 0 : (product?.stock ?? 0)).replaceAll(',', ''), product?.unit ?? 'واحد'),
+                    _F('موجودی فعلی', plainNum((product?.stock ?? 0) < 0 ? 0 : (product?.stock ?? 0)), product?.unit ?? 'واحد'),
                     _F('قیمت تمام‌شدهٔ فعلی', '${product != null ? (product!.costPrice > 0 ? product!.costPrice : product!.buyPrice) : 0}', currencyLabel),
-                    _F('تعداد خرید جدید', numText(parseNum(batch.text)).replaceAll(',', ''), product?.unit ?? 'واحد'),
+                    _F('تعداد خرید جدید', plainNum(parseNum(batch.text)), product?.unit ?? 'واحد'),
                   ],
                   compute: (v) {
                     final avg = Pricing.weightedAverage(v[0], v[1], v[2], cost);
@@ -623,24 +622,25 @@ class _CostingPageState extends State<CostingPage> {
             ),
           ),
           SizedBox(
-            width: 150,
-            child: TextField(
-              controller: l.value,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: InputDecoration(
-                labelText: l.type == 'percent' ? 'درصد' : (l.type == 'fx' ? 'مبلغ به ارز' : 'مبلغ'),
-                isDense: true,
-              ),
-            ),
+            width: 170,
+            child: l.type == 'percent'
+                ? TextField(
+                    controller: l.value,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(labelText: 'درصد', suffixText: '٪', isDense: true),
+                  )
+                : AmountField(
+                    controller: l.value,
+                    label: l.type == 'fx' ? 'مبلغ به ارز' : 'مبلغ',
+                    suffix: l.type == 'fx' ? '' : null,
+                    decimal: true,
+                    dense: true,
+                  ),
           ),
           if (l.type == 'fx')
             SizedBox(
-              width: 150,
-              child: TextField(
-                controller: l.rate,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: InputDecoration(labelText: 'نرخ ارز ($currencyLabel)', isDense: true),
-              ),
+              width: 170,
+              child: AmountField(controller: l.rate, label: 'نرخ هر واحد ارز', decimal: true, dense: true),
             ),
           if (l.type != 'percent')
             SizedBox(
@@ -666,6 +666,9 @@ class _CostingPageState extends State<CostingPage> {
 class _F {
   const _F(this.label, this.initial, this.suffix);
   final String label, initial, suffix;
+
+  /// Amount fields (suffix is the currency) get thousands separators.
+  bool get money => suffix == currencyLabel;
 }
 
 class _Out {
@@ -703,7 +706,9 @@ class _FormulaCard extends StatefulWidget {
 }
 
 class _FormulaCardState extends State<_FormulaCard> {
-  late final List<TextEditingController> ctl = [for (final f in widget.fields) TextEditingController(text: f.initial)];
+  late final List<TextEditingController> ctl = [
+    for (final f in widget.fields) TextEditingController(text: f.money ? inputNum(double.tryParse(f.initial) ?? 0) : f.initial),
+  ];
 
   @override
   void dispose() {
@@ -732,6 +737,7 @@ class _FormulaCardState extends State<_FormulaCard> {
               child: TextField(
                 controller: ctl[i],
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: widget.fields[i].money ? [ThousandsFormatter(decimal: true)] : null,
                 onChanged: (_) => setState(() {}),
                 decoration: InputDecoration(labelText: widget.fields[i].label, suffixText: widget.fields[i].suffix, isDense: true),
               ),
@@ -744,7 +750,7 @@ class _FormulaCardState extends State<_FormulaCard> {
   }
 
   List<Widget> _results(BuildContext context) {
-    final outs = widget.compute([for (final c in ctl) parseNum(c.text)]);
+    final outs = widget.compute([for (var i = 0; i < ctl.length; i++) widget.fields[i].money ? parseMoneyNum(ctl[i].text) : parseNum(ctl[i].text)]);
     if (outs == null) return [Text('با این مقدارها قابل محاسبه نیست.', style: TextStyle(color: Theme.of(context).colorScheme.error))];
     return [
       for (final o in outs)

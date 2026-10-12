@@ -237,6 +237,7 @@ class Repo extends ChangeNotifier {
     final rows = await store.db.query('settings', where: 'deleted=0');
     settings = {for (final r in rows) r['id'] as String: r['value'] as String};
     currencyLabel = settings['currency'] ?? 'تومان';
+    thousandsSep = settings['thousands_sep'] == ',' ? ',' : '.';
   }
 
   String setting(String key, [String def = '']) => settings[key] ?? def;
@@ -809,6 +810,61 @@ class Repo extends ChangeNotifier {
       names: {for (final p in parts) p.id: p.name, for (final a in accs) a.id: a.name},
     );
   }
+
+  // ---- currency -----------------------------------------------------------
+
+  /// Multiplies every stored amount by [factor] (10 for تومان → ریال, 0.1 for
+  /// the way back). Foreign-currency amounts and percentages stay as they are;
+  /// exchange rates follow the local currency. Returns the number of rows
+  /// rewritten. Saved custom formulas are not touched.
+  Future<int> convertAmounts(double factor) async {
+    var rewritten = 0;
+    await store.db.transaction((tx) async {
+      Future<void> scale(String table, List<String> cols) async {
+        for (final r in await tx.query(table, where: 'deleted=0')) {
+          final row = {...r};
+          for (final c in cols) {
+            row[c] = ((r[c] as num) * factor).round();
+          }
+          await store.save(table, row, exec: tx);
+          rewritten++;
+        }
+      }
+
+      await scale('accounts', ['opening']);
+      await scale('transactions', ['amount']);
+      await scale('invoices', ['discount']);
+      await scale('invoice_items', ['unit_price']);
+      await scale('products', ['sale_price', 'buy_price']);
+      await scale('cheques', ['amount']);
+      for (final r in await tx.query('costings', where: 'deleted=0')) {
+        final lines = CostSheet.linesFromJson(r['lines'] as String);
+        for (final l in lines) {
+          if (l.type == 'amount') l.value *= factor;
+          if (l.type == 'fx') l.rate *= factor;
+        }
+        await store.save('costings', {
+          ...r,
+          'unit_cost': ((r['unit_cost'] as num) * factor).round(),
+          'lines': CostSheet(lines: lines).linesJson(),
+        }, exec: tx);
+        rewritten++;
+      }
+    });
+    await _loadSettings();
+    notifyListeners();
+    return rewritten;
+  }
+
+  /// Switches the currency name. With [convert] the stored amounts are scaled
+  /// too (×10 to ریال, ÷10 to تومان).
+  Future<void> setCurrency(String unit, {required bool convert}) async {
+    if (unit == currencyLabel) return;
+    if (convert) await convertAmounts(unit == 'ریال' ? 10 : 0.1);
+    await setSetting('currency', unit);
+  }
+
+  Future<void> setThousandsSep(String sep) => setSetting('thousands_sep', sep == ',' ? ',' : '.');
 
   // ---- backup -------------------------------------------------------------
 
