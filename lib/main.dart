@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
+import 'data/company_manager.dart';
 import 'data/db.dart';
 import 'data/repo.dart';
 import 'sync/sync_service.dart';
 import 'ui/accounts_page.dart';
 import 'ui/app_theme.dart';
 import 'ui/cheques_page.dart';
+import 'ui/companies_page.dart';
 import 'ui/costing_page.dart';
 import 'ui/dashboard_page.dart';
 import 'ui/invoices_page.dart';
@@ -20,29 +22,28 @@ import 'ui/transactions_page.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   initDatabaseFactory();
-  final repo = Repo(await AppDb.open());
-  await repo.init();
-  final theme = AppTheme(repo.store);
+  final companies = await CompanyManager.open();
+  final theme = AppTheme(companies.prefs);
   await theme.load();
-  final sync = SyncService(repo);
+  final sync = SyncService(companies);
   try {
     await sync.startServer();
   } catch (_) {
     // Port busy or no network permission: the app still works offline and can
     // still push to the other device.
   }
-  runApp(AccountingApp(repo: repo, sync: sync, theme: theme));
+  runApp(AccountingApp(companies: companies, sync: sync, theme: theme));
 }
 
 class AccountingApp extends StatelessWidget {
-  const AccountingApp({super.key, required this.repo, required this.sync, required this.theme});
-  final Repo repo;
+  const AccountingApp({super.key, required this.companies, required this.sync, required this.theme});
+  final CompanyManager companies;
   final SyncService sync;
   final AppTheme theme;
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
-        listenable: theme,
+        listenable: Listenable.merge([theme, companies]),
         builder: (context, _) => MaterialApp(
           title: 'حسابداری ساده',
           debugShowCheckedModeBanner: false,
@@ -60,7 +61,8 @@ class AccountingApp extends StatelessWidget {
             data: MediaQuery.of(context).copyWith(textScaler: TextScaler.linear(theme.fontScale)),
             child: child!,
           ),
-          home: HomePage(repo: repo, sync: sync, theme: theme),
+          // A new key per company rebuilds every screen with that company's data.
+          home: HomePage(key: ValueKey(companies.activeId), repo: companies.active, companies: companies, sync: sync, theme: theme),
         ),
       );
 }
@@ -82,12 +84,14 @@ const _dests = [
   _Dest('accounts', 'حساب‌ها', Icons.account_balance_wallet_outlined, Icons.account_balance_wallet),
   _Dest('reports', 'گزارش‌ها', Icons.bar_chart_outlined, Icons.bar_chart),
   _Dest('sync', 'همگام‌سازی', Icons.sync, Icons.sync),
+  _Dest('companies', 'شرکت‌ها', Icons.business_outlined, Icons.business),
   _Dest('settings', 'تنظیمات', Icons.settings_outlined, Icons.settings),
 ];
 
 class HomePage extends StatefulWidget {
-  const HomePage({super.key, required this.repo, required this.sync, required this.theme});
+  const HomePage({super.key, required this.repo, required this.companies, required this.sync, required this.theme});
   final Repo repo;
+  final CompanyManager companies;
   final SyncService sync;
   final AppTheme theme;
   @override
@@ -115,7 +119,8 @@ class _HomePageState extends State<HomePage> {
         'cheques' => ChequesPage(repo: widget.repo),
         'accounts' => AccountsPage(repo: widget.repo),
         'reports' => ReportsPage(repo: widget.repo),
-        'sync' => SyncPage(repo: widget.repo, sync: widget.sync),
+        'sync' => SyncPage(repo: widget.repo, sync: widget.sync, companies: widget.companies),
+        'companies' => CompaniesPage(companies: widget.companies, onOpenSync: () => setState(() => page = 'sync')),
         _ => SettingsPage(repo: widget.repo, theme: widget.theme),
       };
 
@@ -124,20 +129,50 @@ class _HomePageState extends State<HomePage> {
     return SafeArea(
       child: Column(children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
-          child: Row(children: [
-            Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(color: scheme.primary, borderRadius: BorderRadius.circular(12)),
-              child: Icon(Icons.calculate_outlined, color: scheme.onPrimary),
+          padding: const EdgeInsets.fromLTRB(12, 16, 12, 8),
+          child: PopupMenuButton<String>(
+            tooltip: 'تغییر شرکت',
+            position: PopupMenuPosition.under,
+            onSelected: (v) async {
+              if (v == '#new') {
+                await addCompanyDialog(context, widget.companies);
+              } else if (v == '#manage') {
+                if (inDrawer) Navigator.pop(context);
+                _go('companies');
+              } else {
+                await widget.companies.switchTo(v);
+              }
+            },
+            itemBuilder: (_) => [
+              for (final c in widget.companies.companies)
+                PopupMenuItem(
+                  value: c.id,
+                  child: Row(children: [
+                    Icon(c.id == widget.companies.activeId ? Icons.check_circle : Icons.circle_outlined, size: 18),
+                    const SizedBox(width: 8),
+                    Flexible(child: Text(c.name, overflow: TextOverflow.ellipsis)),
+                  ]),
+                ),
+              const PopupMenuDivider(),
+              const PopupMenuItem(value: '#new', child: ListTile(dense: true, leading: Icon(Icons.add_business_outlined), title: Text('شرکت جدید'))),
+              const PopupMenuItem(value: '#manage', child: ListTile(dense: true, leading: Icon(Icons.settings_suggest_outlined), title: Text('مدیریت شرکت‌ها'))),
+            ],
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              child: Row(children: [
+                Image.asset('assets/logo.png', width: 42, height: 42, filterQuality: FilterQuality.medium),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(widget.companies.activeInfo.name,
+                        maxLines: 1, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+                    Text(widget.companies.companies.length > 1 ? 'تغییر شرکت' : 'حسابداری', style: Theme.of(context).textTheme.bodySmall),
+                  ]),
+                ),
+                const Icon(Icons.unfold_more, size: 20),
+              ]),
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(widget.repo.setting('business_name', 'حسابداری ساده'),
-                  maxLines: 1, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
-            ),
-          ]),
+          ),
         ),
         Expanded(
           child: ListView(padding: const EdgeInsets.symmetric(horizontal: 12), children: [

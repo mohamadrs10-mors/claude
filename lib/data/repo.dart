@@ -7,6 +7,7 @@ import '../util/format.dart';
 import '../print/print_settings.dart';
 import 'costing.dart';
 import 'db.dart';
+import 'device_prefs.dart';
 
 class Account {
   Account(this.id, this.name, this.kind, this.opening, this.balance);
@@ -213,23 +214,27 @@ class Dashboard {
 /// All accounting queries and mutations. UI listens to it and rebuilds when the
 /// data changes (including changes that arrive from a sync).
 class Repo extends ChangeNotifier {
-  Repo(this.store);
+  Repo(this.store, {DevicePrefs? prefs, this.companyId = ''}) : prefs = prefs ?? DevicePrefs.memory();
   final AppDb store;
+
+  /// Device-wide preferences (theme, print set-up).
+  final DevicePrefs prefs;
+
+  /// Identity of the company this data belongs to; shared by the devices that sync it.
+  String companyId;
 
   Map<String, String> settings = {};
 
   /// Page set-up for printing (per device, not synced).
-  PrintSettings printSettings = const PrintSettings();
+  PrintSettings get printSettings => PrintSettings.fromPrefs(prefs);
 
   /// Loads synced settings (business info, VAT, currency). Call once at start.
   Future<void> init() async {
     await _loadSettings();
-    printSettings = await PrintSettings.load(store);
   }
 
   Future<void> setPrint(PrintSettings s) async {
-    printSettings = s;
-    await s.save(store);
+    await s.save(prefs);
     notifyListeners();
   }
 

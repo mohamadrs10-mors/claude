@@ -1,7 +1,9 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:simple_accounting/data/company_manager.dart';
 import 'package:simple_accounting/data/db.dart';
+import 'package:simple_accounting/data/device_prefs.dart';
 import 'package:simple_accounting/data/repo.dart';
 import 'package:simple_accounting/sync/sync_service.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -24,8 +26,10 @@ void main() {
   setUp(() async {
     a = await newRepo();
     b = await newRepo();
-    sa = SyncService(a);
-    sb = SyncService(b);
+    a.companyId = 'c1';
+    b.companyId = 'c1';
+    sa = SyncService(CompanyManager.forRepos({'c1': a}, DevicePrefs.memory()));
+    sb = SyncService(CompanyManager.forRepos({'c1': b}, DevicePrefs.memory()));
     await sb.startServer(port: 0); // random free port
     await sa.setPairCode('1234');
     await sb.setPairCode('1234');
@@ -62,14 +66,14 @@ void main() {
     await a.saveAccount(name: 'بانک', kind: 'bank', opening: 0);
     await b.saveParty(name: 'رضا');
 
-    final r1 = await sa.syncWith('127.0.0.1', port: port);
+    final r1 = await sa.syncWith(a, '127.0.0.1', port: port);
     expect(r1.sent, 1);
     expect(r1.received, 1);
     expect((await b.accounts()).map((e) => e.name), ['بانک']);
     expect((await a.parties()).map((e) => e.name), ['رضا']);
 
     // Second sync with no changes moves nothing real.
-    final r2 = await sa.syncWith('127.0.0.1', port: port);
+    final r2 = await sa.syncWith(a, '127.0.0.1', port: port);
     expect(r2.sent + r2.received, 0);
     expect((await b.accounts()).length, 1);
 
@@ -78,19 +82,19 @@ void main() {
     await a.saveAccount(id: id, name: 'بانک ملی', kind: 'bank', opening: 0);
     await Future<void>.delayed(const Duration(milliseconds: 5));
     await b.saveAccount(id: id, name: 'بانک ملت', kind: 'bank', opening: 0);
-    await sa.syncWith('127.0.0.1', port: port);
+    await sa.syncWith(a, '127.0.0.1', port: port);
     expect((await a.accounts()).single.name, 'بانک ملت');
     expect((await b.accounts()).single.name, 'بانک ملت');
 
     // Delete on A propagates to B.
     await a.deleteAccount(id);
-    await sa.syncWith('127.0.0.1', port: port);
+    await sa.syncWith(a, '127.0.0.1', port: port);
     expect(await b.accounts(), isEmpty);
   });
 
   test('wrong pair code is rejected', () async {
     await sa.setPairCode('9999');
-    expect(() => sa.syncWith('127.0.0.1', port: sb.port!), throwsA(isA<SyncException>()));
+    expect(() => sa.syncWith(a, '127.0.0.1', port: sb.port!), throwsA(isA<SyncException>()));
   });
 
   test('invoice with items syncs and totals match', () async {
@@ -99,7 +103,7 @@ void main() {
     await a.saveInvoice(
         number: 1, kind: 'sale', date: '2025-02-01', partyId: p.id, discount: 0, note: '',
         items: [InvoiceItem('x', 3, 700)]);
-    await sa.syncWith('127.0.0.1', port: sb.port!);
+    await sa.syncWith(a, '127.0.0.1', port: sb.port!);
     expect((await b.invoices()).single.total, 2100);
     expect((await b.parties()).single.balance, 2100);
   });

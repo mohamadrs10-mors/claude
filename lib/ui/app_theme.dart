@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../data/db.dart';
+import '../data/device_prefs.dart';
 
 const themePresets = <(String, Color)>[
   ('فیروزه‌ای', Color(0xFF00897B)),
@@ -19,8 +19,8 @@ const themePresets = <(String, Color)>[
 /// Appearance preferences. They are stored per device (not synced) so the
 /// phone and the PC can look different.
 class AppTheme extends ChangeNotifier {
-  AppTheme(this._db);
-  final AppDb _db;
+  AppTheme(this._prefs);
+  final DevicePrefs _prefs;
 
   ThemeMode mode = ThemeMode.system;
   Color seed = themePresets.first.$2;
@@ -28,39 +28,39 @@ class AppTheme extends ChangeNotifier {
   bool compact = false;
 
   Future<void> load() async {
-    mode = switch (await _db.getMeta('theme_mode')) {
+    mode = switch (_prefs.get('theme_mode')) {
       'light' => ThemeMode.light,
       'dark' => ThemeMode.dark,
       _ => ThemeMode.system,
     };
-    final c = int.tryParse(await _db.getMeta('theme_seed') ?? '');
+    final c = int.tryParse(_prefs.get('theme_seed') ?? '');
     if (c != null) seed = Color(c);
-    fontScale = double.tryParse(await _db.getMeta('font_scale') ?? '') ?? 1.0;
-    compact = (await _db.getMeta('compact')) == '1';
+    fontScale = double.tryParse(_prefs.get('font_scale') ?? '') ?? 1.0;
+    compact = _prefs.get('compact') == '1';
     notifyListeners();
   }
 
   Future<void> setMode(ThemeMode m) async {
     mode = m;
-    await _db.setMeta('theme_mode', m.name);
+    await _prefs.set('theme_mode', m.name);
     notifyListeners();
   }
 
   Future<void> setSeed(Color c) async {
     seed = c;
-    await _db.setMeta('theme_seed', '${c.toARGB32()}');
+    await _prefs.set('theme_seed', '${c.toARGB32()}');
     notifyListeners();
   }
 
   Future<void> setFontScale(double v) async {
     fontScale = v;
-    await _db.setMeta('font_scale', '$v');
+    await _prefs.set('font_scale', '$v');
     notifyListeners();
   }
 
   Future<void> setCompact(bool v) async {
     compact = v;
-    await _db.setMeta('compact', v ? '1' : '0');
+    await _prefs.set('compact', v ? '1' : '0');
     notifyListeners();
   }
 

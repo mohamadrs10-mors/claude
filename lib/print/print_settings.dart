@@ -1,6 +1,6 @@
 import 'package:pdf/pdf.dart';
 
-import '../data/db.dart';
+import '../data/device_prefs.dart';
 
 /// Page set-up shared by every printout. Stored per device (a PC and a phone
 /// usually have different printers), so it is not synced.
@@ -44,22 +44,21 @@ class PrintSettings {
         rollWidthMm: rollWidthMm ?? this.rollWidthMm,
       );
 
-  static Future<PrintSettings> load(AppDb db) async {
-    final paper = await db.getMeta('print_paper');
-    return PrintSettings(
-      paper: paper == 'a5' ? 'a5' : 'a4',
-      landscape: (await db.getMeta('print_landscape')) == '1',
-      marginMm: (double.tryParse(await db.getMeta('print_margin') ?? '') ?? 12).clamp(0, 40).toDouble(),
-      fontScale: (double.tryParse(await db.getMeta('print_font') ?? '') ?? 1.0).clamp(0.6, 1.6).toDouble(),
-      rollWidthMm: (await db.getMeta('print_roll')) == '58' ? 58 : 80,
-    );
-  }
+  static Future<PrintSettings> load(DevicePrefs prefs) async => PrintSettings.fromPrefs(prefs);
 
-  Future<void> save(AppDb db) async {
-    await db.setMeta('print_paper', paper);
-    await db.setMeta('print_landscape', landscape ? '1' : '0');
-    await db.setMeta('print_margin', '$marginMm');
-    await db.setMeta('print_font', '$fontScale');
-    await db.setMeta('print_roll', '$rollWidthMm');
+  factory PrintSettings.fromPrefs(DevicePrefs prefs) => PrintSettings(
+        paper: prefs.get('print_paper') == 'a5' ? 'a5' : 'a4',
+        landscape: prefs.get('print_landscape') == '1',
+        marginMm: (double.tryParse(prefs.get('print_margin') ?? '') ?? 12).clamp(0, 40).toDouble(),
+        fontScale: (double.tryParse(prefs.get('print_font') ?? '') ?? 1.0).clamp(0.6, 1.6).toDouble(),
+        rollWidthMm: prefs.get('print_roll') == '58' ? 58 : 80,
+      );
+
+  Future<void> save(DevicePrefs prefs) async {
+    await prefs.set('print_paper', paper);
+    await prefs.set('print_landscape', landscape ? '1' : '0');
+    await prefs.set('print_margin', '$marginMm');
+    await prefs.set('print_font', '$fontScale');
+    await prefs.set('print_roll', '$rollWidthMm');
   }
 }

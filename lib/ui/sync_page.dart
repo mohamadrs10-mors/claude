@@ -2,15 +2,17 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../data/company_manager.dart';
 import '../data/repo.dart';
 import '../sync/sync_service.dart';
 import '../util/format.dart';
 import 'common.dart';
 
 class SyncPage extends StatefulWidget {
-  const SyncPage({super.key, required this.repo, required this.sync});
+  const SyncPage({super.key, required this.repo, required this.sync, required this.companies});
   final Repo repo;
   final SyncService sync;
+  final CompanyManager companies;
   @override
   State<SyncPage> createState() => _SyncPageState();
 }
@@ -78,13 +80,86 @@ class _SyncPageState extends State<SyncPage> {
     setState(() => busy = true);
     try {
       await widget.repo.store.setMeta('peer', peer.text.trim());
-      final r = await sync.syncWith(p.$1, port: p.$2);
+      final r = await sync.syncWith(widget.repo, p.$1, port: p.$2);
       status = 'موفق • ارسال ${faDigits('${r.sent}')} / دریافت ${faDigits('${r.received}')} • ${_fmt(DateTime.now())}';
     } catch (e) {
-      status = 'ناموفق: $e';
+      status = 'ناموفق: $e${e is SyncException && e.message.contains('وجود ندارد') ? '\nدکمهٔ «اتصال شرکت‌ها» را بزنید.' : ''}';
     } finally {
       if (mounted) setState(() => busy = false);
     }
+  }
+
+
+  /// Lists the companies of the other device and lets the user copy one here or
+  /// declare that one of them is the same as the active company.
+  Future<void> _link() async {
+    final p = _parsePeer();
+    if (p == null) {
+      toast(context, 'آدرس دستگاه مقابل را وارد کنید.');
+      return;
+    }
+    List<(String, String)> theirs;
+    try {
+      theirs = await sync.fetchCompanies(p.$1, port: p.$2);
+    } catch (e) {
+      if (mounted) toast(context, '$e');
+      return;
+    }
+    if (!mounted) return;
+    final mgr = widget.companies;
+    await showDialog<void>(
+      context: context,
+      builder: (dc) => StatefulBuilder(
+        builder: (dc, set) => AlertDialog(
+          title: const Text('شرکت‌های دستگاه مقابل'),
+          content: SizedBox(
+            width: 460,
+            child: SingleChildScrollView(
+              child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('شرکت فعال این دستگاه: «${mgr.activeInfo.name}»', style: Theme.of(dc).textTheme.titleSmall),
+                const SizedBox(height: 10),
+                if (theirs.isEmpty) const Text('دستگاه مقابل شرکتی ندارد.'),
+                for (final (id, name) in theirs)
+                  Card(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Text(name, style: const TextStyle(fontWeight: FontWeight.w700)),
+                        const SizedBox(height: 6),
+                        if (mgr.companies.any((c) => c.id == id))
+                          Text(id == mgr.activeId ? 'همین شرکتِ فعال است؛ آمادهٔ همگام‌سازی.' : 'این شرکت روی این دستگاه هم هست (با همین شناسه).',
+                              style: Theme.of(dc).textTheme.bodySmall)
+                        else
+                          Wrap(spacing: 8, runSpacing: 6, children: [
+                            FilledButton.tonal(
+                              onPressed: () async {
+                                Navigator.pop(dc);
+                                await mgr.create(name, seed: false, activate: true, id: id);
+                                if (mounted) toast(context, 'شرکت «$name» ساخته شد. «همگام‌سازی الان» را بزنید.');
+                              },
+                              child: const Text('دریافت به‌عنوان شرکت جدید'),
+                            ),
+                            OutlinedButton(
+                              onPressed: () async {
+                                if (!await confirm(dc, 'شرکت فعال این دستگاه («${mgr.activeInfo.name}») همان شرکت «$name» دستگاه مقابل در نظر گرفته شود؟ اطلاعات دو طرف در همگام‌سازی بعدی ادغام می‌شود.')) return;
+                                final ok = await mgr.adoptId(mgr.activeId, id);
+                                if (dc.mounted) Navigator.pop(dc);
+                                if (mounted) toast(context, ok ? 'شناسهٔ شرکت یکی شد. «همگام‌سازی الان» را بزنید.' : 'این شناسه قبلاً در این دستگاه هست.');
+                              },
+                              child: const Text('همان شرکت فعلی است'),
+                            ),
+                          ]),
+                      ]),
+                    ),
+                  ),
+              ]),
+            ),
+          ),
+          actions: [TextButton(onPressed: () => Navigator.pop(dc), child: const Text('بستن'))],
+        ),
+      ),
+    );
   }
 
   @override
@@ -144,7 +219,13 @@ class _SyncPageState extends State<SyncPage> {
                 setState(() => auto = v);
               },
             ),
-            if (status != null) Text(status!),
+            const SizedBox(height: 4),
+            OutlinedButton.icon(
+              onPressed: busy ? null : _link,
+              icon: const Icon(Icons.link),
+              label: const Text('اتصال شرکت‌ها'),
+            ),
+            if (status != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text(status!)),
           ]),
         ),
       ),

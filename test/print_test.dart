@@ -35,7 +35,7 @@ void main() {
     final r = await newRepo();
     expect(r.printSettings.paper, 'a4');
     await r.setPrint(const PrintSettings(paper: 'a5', landscape: true, marginMm: 8, fontScale: 1.2, rollWidthMm: 58));
-    final again = await PrintSettings.load(r.store);
+    final again = await PrintSettings.load(r.prefs);
     expect(again.paper, 'a5');
     expect(again.landscape, isTrue);
     expect(again.marginMm, 8);
