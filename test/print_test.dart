@@ -148,4 +148,27 @@ void main() {
       expect((await PdfDocs(r).statement(party, from: '2025-01-02', toExclusive: '2025-02-01', periodLabel: 'دی')).length, greaterThan(500));
     });
   });
+
+  testWidgets('the business logo is embedded in invoices and reports, and a broken one is ignored', (tester) async {
+    await tester.runAsync(() async {
+      final r = await newRepo();
+      await r.saveParty(name: 'مشتری');
+      final p = (await r.parties()).single;
+      await r.saveInvoice(number: 1, kind: 'sale', date: '2025-05-01', partyId: p.id, discount: 0, note: '', items: [InvoiceItem('کالا', 1, 1000)]);
+      final inv = (await r.invoices()).single;
+      final items = await r.invoiceItems(inv.id);
+      final plain = await PdfDocs(r).invoice(inv, items, p);
+      final plainReport = await PdfDocs(r).report(ReportDoc(title: 'x'));
+      final plainRoll = await PdfDocs(r).invoice(inv, items, p, roll: true);
+
+      await r.setSetting('business_logo', base64Encode(File('assets/logo.png').readAsBytesSync()));
+      final withLogo = await PdfDocs(r).invoice(inv, items, p);
+      expect(withLogo.length, greaterThan(plain.length + 20000)); // the image is in the file
+      expect((await PdfDocs(r).report(ReportDoc(title: 'x'))).length, greaterThan(plainReport.length + 20000));
+      expect((await PdfDocs(r).invoice(inv, items, p, roll: true)).length, greaterThan(plainRoll.length + 20000));
+
+      await r.setSetting('business_logo', 'not-an-image!!');
+      expect((await PdfDocs(r).invoice(inv, items, p)).length, closeTo(plain.length, 300));
+    });
+  });
 }

@@ -1,6 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
+import 'data/app_lock.dart';
+import 'data/backup_service.dart';
 import 'data/company_manager.dart';
 import 'data/db.dart';
 import 'data/repo.dart';
@@ -12,6 +16,7 @@ import 'ui/companies_page.dart';
 import 'ui/costing_page.dart';
 import 'ui/dashboard_page.dart';
 import 'ui/invoices_page.dart';
+import 'ui/lock_screen.dart';
 import 'ui/parties_page.dart';
 import 'ui/products_page.dart';
 import 'ui/reports_page.dart';
@@ -32,18 +37,25 @@ Future<void> main() async {
     // Port busy or no network permission: the app still works offline and can
     // still push to the other device.
   }
-  runApp(AccountingApp(companies: companies, sync: sync, theme: theme));
+  final lock = AppLock(companies.prefs);
+  final backups = BackupService(companies);
+  // Daily automatic backups: once shortly after start, then every few hours.
+  Timer(const Duration(seconds: 8), backups.runIfDue);
+  Timer.periodic(const Duration(hours: 3), (_) => backups.runIfDue());
+  runApp(AccountingApp(companies: companies, sync: sync, theme: theme, lock: lock, backups: backups));
 }
 
 class AccountingApp extends StatelessWidget {
-  const AccountingApp({super.key, required this.companies, required this.sync, required this.theme});
+  const AccountingApp({super.key, required this.companies, required this.sync, required this.theme, required this.lock, required this.backups});
+  final AppLock lock;
+  final BackupService backups;
   final CompanyManager companies;
   final SyncService sync;
   final AppTheme theme;
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
-        listenable: Listenable.merge([theme, companies]),
+        listenable: Listenable.merge([theme, companies, lock]),
         builder: (context, _) => MaterialApp(
           title: 'حسابداری ساده',
           debugShowCheckedModeBanner: false,
@@ -62,9 +74,46 @@ class AccountingApp extends StatelessWidget {
             child: child!,
           ),
           // A new key per company rebuilds every screen with that company's data.
-          home: HomePage(key: ValueKey(companies.activeId), repo: companies.active, companies: companies, sync: sync, theme: theme),
+          home: _Lifecycle(
+            lock: lock,
+            child: lock.isUnlocked(companies.activeId)
+                ? HomePage(key: ValueKey(companies.activeId), repo: companies.active, companies: companies, sync: sync, theme: theme, lock: lock, backups: backups)
+                : LockScreen(key: ValueKey('lock${companies.activeId}'), lock: lock, companies: companies),
+          ),
         ),
       );
+}
+
+/// Tells the lock when the app goes to the background and comes back.
+class _Lifecycle extends StatefulWidget {
+  const _Lifecycle({required this.lock, required this.child});
+  final AppLock lock;
+  final Widget child;
+  @override
+  State<_Lifecycle> createState() => _LifecycleState();
+}
+
+class _LifecycleState extends State<_Lifecycle> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.hidden) widget.lock.appPaused();
+    if (state == AppLifecycleState.resumed) widget.lock.appResumed();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }
 
 class _Dest {
@@ -89,7 +138,9 @@ const _dests = [
 ];
 
 class HomePage extends StatefulWidget {
-  const HomePage({super.key, required this.repo, required this.companies, required this.sync, required this.theme});
+  const HomePage({super.key, required this.repo, required this.companies, required this.sync, required this.theme, required this.lock, required this.backups});
+  final AppLock lock;
+  final BackupService backups;
   final Repo repo;
   final CompanyManager companies;
   final SyncService sync;
@@ -121,7 +172,7 @@ class _HomePageState extends State<HomePage> {
         'reports' => ReportsPage(repo: widget.repo),
         'sync' => SyncPage(repo: widget.repo, sync: widget.sync, companies: widget.companies),
         'companies' => CompaniesPage(companies: widget.companies, onOpenSync: () => setState(() => page = 'sync')),
-        _ => SettingsPage(repo: widget.repo, theme: widget.theme),
+        _ => SettingsPage(repo: widget.repo, theme: widget.theme, lock: widget.lock, backups: widget.backups),
       };
 
   Widget _sidebar({bool inDrawer = false}) {

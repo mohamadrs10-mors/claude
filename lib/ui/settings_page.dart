@@ -1,9 +1,7 @@
-import 'dart:convert';
-import 'dart:io';
-
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import '../data/app_lock.dart';
+import '../data/backup_service.dart';
 import '../data/repo.dart';
 import '../util/format.dart';
 import 'app_theme.dart';
@@ -11,9 +9,12 @@ import '../print/print_settings.dart';
 import '../print/report_doc.dart';
 import 'common.dart';
 import 'print_dialog.dart';
+import 'settings_extras.dart';
 
 class SettingsPage extends StatefulWidget {
-  const SettingsPage({super.key, required this.repo, required this.theme});
+  const SettingsPage({super.key, required this.repo, required this.theme, required this.lock, required this.backups});
+  final AppLock lock;
+  final BackupService backups;
   final Repo repo;
   final AppTheme theme;
   @override
@@ -91,36 +92,6 @@ class _SettingsPageState extends State<SettingsPage> {
       if (repo.setting(e.key) != v) await repo.setSetting(e.key, v);
     }
     if (mounted) toast(context, 'اطلاعات ذخیره شد.');
-  }
-
-  Future<void> _backup() async {
-    final json = await repo.exportJson();
-    final name = 'accounting-backup-${todayIso()}.json';
-    try {
-      final path = await FilePicker.saveFile(
-        dialogTitle: 'ذخیرهٔ فایل پشتیبان',
-        fileName: name,
-        bytes: utf8.encode(json),
-      );
-      if (!mounted) return;
-      toast(context, path == null && !Platform.isAndroid ? 'ذخیره لغو شد.' : 'فایل پشتیبان ذخیره شد.');
-    } catch (e) {
-      if (mounted) toast(context, 'ذخیره ممکن نشد: $e');
-    }
-  }
-
-  Future<void> _restore() async {
-    try {
-      final f = await FilePicker.pickFile(dialogTitle: 'انتخاب فایل پشتیبان');
-      if (f == null) return;
-      final bytes = await f.readAsBytes();
-      final n = await repo.importJson(utf8.decode(bytes));
-      if (mounted) toast(context, 'بازیابی انجام شد (${faDigits('$n')} مورد).');
-    } on FormatException catch (e) {
-      if (mounted) toast(context, e.message);
-    } catch (e) {
-      if (mounted) toast(context, 'بازیابی ممکن نشد: $e');
-    }
   }
 
   @override
@@ -364,16 +335,15 @@ class _SettingsPageState extends State<SettingsPage> {
               },
             ),
             gap(16),
-            Section(title: 'پشتیبان‌گیری', child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('از همهٔ اطلاعات یک فایل پشتیبان بگیرید و در جای امن نگه دارید. بازیابی، اطلاعات فایل را با اطلاعات فعلی ادغام می‌کند (مورد جدیدتر می‌ماند).'),
-              gap(),
-              Wrap(spacing: 10, runSpacing: 10, children: [
-                FilledButton.icon(onPressed: _backup, icon: const Icon(Icons.download_outlined), label: const Text('گرفتن پشتیبان')),
-                OutlinedButton.icon(onPressed: _restore, icon: const Icon(Icons.upload_file_outlined), label: const Text('بازیابی از فایل')),
-              ]),
-            ])),
+            LogoSection(repo: repo),
             gap(16),
-            const Section(title: 'دربارهٔ برنامه', child: Text('حسابداری ساده • نسخهٔ ۱٫۵\nفونت وزیرمتن (مجوز OFL)')),
+            SecuritySection(repo: repo, lock: widget.lock),
+            gap(16),
+            BackupSection(repo: repo, backups: widget.backups),
+            gap(16),
+            CsvSection(repo: repo),
+            gap(16),
+            const Section(title: 'دربارهٔ برنامه', child: Text('حسابداری ساده • نسخهٔ ۱٫۶\nفونت وزیرمتن (مجوز OFL)')),
           ]),
         ),
       );

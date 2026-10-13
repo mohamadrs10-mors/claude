@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/services.dart' show rootBundle;
@@ -28,6 +29,30 @@ class PdfDocs {
   }
 
   String get _business => repo.setting('business_name', 'حسابداری ساده');
+
+  /// The business logo from Settings, if there is a valid one.
+  pw.MemoryImage? get _logo {
+    final b64 = repo.setting('business_logo');
+    if (b64.isEmpty) return null;
+    try {
+      return pw.MemoryImage(base64Decode(b64));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Logo in a small white rounded box (readable on the coloured invoice header too).
+  pw.Widget _logoBox(pw.MemoryImage img, double size, {bool border = false}) => pw.Container(
+        width: size,
+        height: size,
+        padding: const pw.EdgeInsets.all(3),
+        decoration: pw.BoxDecoration(
+          color: PdfColors.white,
+          borderRadius: pw.BorderRadius.circular(6),
+          border: border ? pw.Border.all(color: _line, width: 0.5) : null,
+        ),
+        child: pw.Image(img, fit: pw.BoxFit.contain),
+      );
 
   /// Scaled font size.
   double _s(double v) => v * s.fontScale;
@@ -107,10 +132,17 @@ class PdfDocs {
       theme: theme,
       footer: _footer,
       build: (c) => [
-        _text(_business, size: 15, bold: true),
-        _text(d.title, size: 13, bold: true, color: _accent),
-        if (d.subtitle.isNotEmpty) _text('${d.subtitle} • تاریخ گزارش: ${jalaliText(todayIso())}', size: 9)
-        else _text('تاریخ گزارش: ${jalaliText(todayIso())}', size: 9),
+        pw.Row(crossAxisAlignment: pw.CrossAxisAlignment.center, children: [
+          if (_logo != null) ...[_logoBox(_logo!, 42, border: true), pw.SizedBox(width: 10)],
+          pw.Expanded(
+            child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+              _text(_business, size: 15, bold: true),
+              _text(d.title, size: 13, bold: true, color: _accent),
+              if (d.subtitle.isNotEmpty) _text('${d.subtitle} • تاریخ گزارش: ${jalaliText(todayIso())}', size: 9)
+              else _text('تاریخ گزارش: ${jalaliText(todayIso())}', size: 9),
+            ]),
+          ),
+        ]),
         pw.SizedBox(height: 10),
         if (d.summary.isNotEmpty) ...[
           pw.Wrap(spacing: 8, runSpacing: 8, children: [
@@ -201,6 +233,7 @@ class PdfDocs {
         textDirection: pw.TextDirection.rtl,
         theme: theme,
         build: (c) => pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.stretch, children: [
+          if (_logo != null) pw.Center(child: pw.SizedBox(height: 40, child: pw.Image(_logo!, fit: pw.BoxFit.contain))),
           pw.Center(child: _text(_business, size: 14, bold: true)),
           if (phone.isNotEmpty) pw.Center(child: _text(faDigits(phone), size: 9)),
           pw.SizedBox(height: 4),
@@ -272,6 +305,7 @@ class PdfDocs {
           padding: const pw.EdgeInsets.all(12),
           decoration: pw.BoxDecoration(color: _accent, borderRadius: pw.BorderRadius.circular(8)),
           child: pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+            if (_logo != null) ...[_logoBox(_logo!, 54), pw.SizedBox(width: 10)],
             pw.Expanded(
               child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
                 _text(_business, size: 17, bold: true, color: PdfColors.white),
