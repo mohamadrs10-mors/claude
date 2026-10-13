@@ -103,7 +103,10 @@ class _InvoicesPageState extends State<InvoicesPage> {
       trailing: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.end, children: [
         Text(money(inv.total), style: const TextStyle(fontWeight: FontWeight.w700)),
         const SizedBox(height: 4),
-        StatusChip(settled ? 'تسویه شده' : 'مانده ${money(inv.remaining)}', settled ? Colors.green.shade700 : Colors.orange.shade800),
+        if (inv.kind == 'proforma')
+          StatusChip(inv.refId != null ? 'تبدیل شده' : 'پیش‌فاکتور', inv.refId != null ? Colors.green.shade700 : Colors.blueGrey)
+        else
+          StatusChip(settled ? 'تسویه شده' : 'مانده ${money(inv.remaining)}', settled ? Colors.green.shade700 : Colors.orange.shade800),
       ]),
       onTap: () => Navigator.push(c, MaterialPageRoute(builder: (_) => InvoiceViewPage(repo: widget.repo, invoiceId: inv.id))),
     );
@@ -215,13 +218,44 @@ class InvoiceViewPage extends StatelessWidget {
                       if (inv.taxPercent > 0) _row('مالیات (${faDigits('${inv.taxPercent}')}٪)', inv.tax),
                       const Divider(height: 20),
                       _row('مبلغ نهایی', inv.total, bold: true),
-                      _row(info.paymentKind == 'receipt' ? 'دریافت‌شده' : 'پرداخت‌شده', inv.paid),
-                      _row('مانده', inv.remaining, bold: true),
+                      if (info.ledger) ...[
+                        _row(info.paymentKind == 'receipt' ? 'دریافت‌شده' : 'پرداخت‌شده', inv.paid),
+                        _row('مانده', inv.remaining, bold: true),
+                      ],
                     ]),
                   ),
                 ),
                 const SizedBox(height: 12),
+                if (inv.kind == 'proforma')
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: Text(
+                      inv.refId == null
+                          ? 'پیش‌فاکتور روی حساب اشخاص، موجودی کالا و گزارش‌ها اثر ندارد. وقتی مشتری پذیرفت، آن را به فاکتور فروش تبدیل کنید.'
+                          : 'این پیش‌فاکتور به یک فاکتور فروش تبدیل شده است.',
+                      style: Theme.of(c).textTheme.bodySmall,
+                    ),
+                  ),
                 Wrap(spacing: 10, runSpacing: 10, children: [
+                  if (inv.kind == 'proforma' && inv.refId == null)
+                    FilledButton.icon(
+                      onPressed: () async {
+                        if (!await confirm(c, 'یک فاکتور فروش با همین اقلام ساخته شود؟')) return;
+                        final newId = await repo.convertProforma(inv.id);
+                        if (c.mounted) {
+                          Navigator.pushReplacement(c, MaterialPageRoute(builder: (_) => InvoiceViewPage(repo: repo, invoiceId: newId)));
+                        }
+                      },
+                      icon: const Icon(Icons.assignment_turned_in_outlined),
+                      label: const Text('تبدیل به فاکتور فروش'),
+                    ),
+                  if (inv.kind == 'proforma' && inv.refId != null)
+                    OutlinedButton.icon(
+                      onPressed: () => Navigator.pushReplacement(c, MaterialPageRoute(builder: (_) => InvoiceViewPage(repo: repo, invoiceId: inv.refId!))),
+                      icon: const Icon(Icons.open_in_new),
+                      label: const Text('نمایش فاکتور ساخته‌شده'),
+                    ),
+                  if (info.ledger)
                   FilledButton.icon(
                     onPressed: () => editTx(c, repo,
                         partyId: inv.partyId, invoiceId: inv.id, kind: info.paymentKind,
@@ -231,7 +265,7 @@ class InvoiceViewPage extends StatelessWidget {
                   ),
                   OutlinedButton.icon(onPressed: openPrint, icon: const Icon(Icons.print_outlined), label: const Text('چاپ فاکتور')),
                 ]),
-                if (txs.isNotEmpty) ...[
+                if (info.ledger && txs.isNotEmpty) ...[
                   const SizedBox(height: 16),
                   Text('پرداخت‌های این فاکتور', style: Theme.of(c).textTheme.titleSmall),
                   const SizedBox(height: 8),
@@ -303,6 +337,7 @@ class _InvoiceEditPageState extends State<InvoiceEditPage> {
   List<Party> parties = [];
   List<Product> products = [];
   Map<String, double> originalQty = {};
+  String autoNumber = '';
   String? originalKind;
   bool loaded = false;
 
@@ -341,7 +376,8 @@ class _InvoiceEditPageState extends State<InvoiceEditPage> {
         lines.add(_Line(t: it.title, q: it.qty == it.qty.roundToDouble() ? '${it.qty.round()}' : '${it.qty}', p: '${it.unitPrice}', productId: it.productId));
       }
     } else {
-      number.text = '${await repo.nextInvoiceNumber()}';
+      autoNumber = '${await repo.nextInvoiceNumber()}';
+      number.text = autoNumber;
       tax.text = repo.setting('default_tax', '0');
       lines.add(_Line());
     }
@@ -384,7 +420,17 @@ class _InvoiceEditPageState extends State<InvoiceEditPage> {
                 initialValue: kind,
                 decoration: const InputDecoration(labelText: 'نوع فاکتور'),
                 items: [for (final k in invoiceKinds) DropdownMenuItem(value: k.code, child: Text(k.label))],
-                onChanged: (v) => setState(() => kind = v!),
+                onChanged: (v) async {
+                  final next = (v == 'proforma') != (kind == 'proforma') ? '${await repo.nextInvoiceNumber(v!)}' : null;
+                  setState(() {
+                    kind = v!;
+                    // Pro-formas have their own number series; follow it while the number is untouched.
+                    if (next != null && widget.invoiceId == null && number.text == autoNumber) {
+                      autoNumber = next;
+                      number.text = next;
+                    }
+                  });
+                },
               ),
               gap(),
               Row(children: [
@@ -500,7 +546,7 @@ class _InvoiceEditPageState extends State<InvoiceEditPage> {
   Widget _lineRow(int i) {
     final l = lines[i];
     final prod = products.where((p) => p.id == l.productId).firstOrNull;
-    final out = !info.stockIn;
+    final out = !info.stockIn && info.ledger;
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.all(10),

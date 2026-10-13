@@ -63,10 +63,10 @@ class _TransactionsPageState extends State<TransactionsPage> {
                     separatorBuilder: (_, _) => const SizedBox(height: 8),
                     itemBuilder: (c, i) {
                       final t = d.txs[i];
-                      final isIn = t.kind == 'receipt';
+                      final isTransfer = t.kind == 'transfer';
                       final sub = [
                         jalaliText(t.date),
-                        d.accounts[t.accountId] ?? '',
+                        isTransfer ? 'از ${d.accounts[t.accountId] ?? ''} به ${d.accounts[t.toAccountId] ?? ''}' : (d.accounts[t.accountId] ?? ''),
                         if (t.partyId != null) d.parties[t.partyId] ?? '',
                         if (t.categoryId != null) d.cats[t.categoryId] ?? '',
                         if (t.description.isNotEmpty) t.description,
@@ -74,10 +74,10 @@ class _TransactionsPageState extends State<TransactionsPage> {
                       return Card(
                         child: ListTile(
                           leading: CircleAvatar(
-                            backgroundColor: (isIn ? Colors.green : Colors.redAccent).withValues(alpha: 0.14),
-                            child: Icon(isIn ? Icons.south_west : Icons.north_east, color: isIn ? Colors.green : Colors.redAccent),
+                            backgroundColor: txColor(t.kind).withValues(alpha: 0.14),
+                            child: Icon(txIcon(t.kind), color: txColor(t.kind)),
                           ),
-                          title: Text('${isIn ? 'دریافت' : 'پرداخت'}  ${moneyC(t.amount)}', style: const TextStyle(fontWeight: FontWeight.w600)),
+                          title: Text('${txKindLabel(t.kind)}  ${moneyC(t.amount)}', style: const TextStyle(fontWeight: FontWeight.w600)),
                           subtitle: Text(sub),
                           onTap: () => editTx(c, repo, tx: t),
                         ),
@@ -117,6 +117,7 @@ Future<void> editTx(BuildContext context, Repo repo,
   var k = tx?.kind ?? kind ?? 'receipt';
   var date = tx?.date ?? todayIso();
   String? accountId = tx?.accountId ?? accounts.first.id;
+  String? toAccountId = tx?.toAccountId ?? (accounts.length > 1 ? accounts[1].id : null);
   String? party = tx?.partyId ?? partyId;
   String? cat = tx?.categoryId;
   final amountC = TextEditingController(text: tx != null ? '${tx.amount}' : (amount != null ? '$amount' : ''));
@@ -127,10 +128,11 @@ Future<void> editTx(BuildContext context, Repo repo,
     context: context,
     builder: (dc) => StatefulBuilder(
       builder: (dc, set) {
+        final transfer = k == 'transfer';
         final cats = allCats.where((c) => c.kind == (k == 'receipt' ? 'income' : 'expense')).toList();
         if (cat != null && !cats.any((c) => c.id == cat)) cat = null;
         return AlertDialog(
-          title: Text(tx == null ? 'تراکنش جدید' : 'ویرایش تراکنش'),
+          title: Text(tx == null ? (transfer ? 'انتقال بین حساب‌ها' : 'تراکنش جدید') : 'ویرایش تراکنش'),
           content: SizedBox(
             width: 420,
             child: SingleChildScrollView(
@@ -141,6 +143,7 @@ Future<void> editTx(BuildContext context, Repo repo,
                     segments: const [
                       ButtonSegment(value: 'receipt', label: Text('دریافت'), icon: Icon(Icons.south_west)),
                       ButtonSegment(value: 'payment', label: Text('پرداخت'), icon: Icon(Icons.north_east)),
+                      ButtonSegment(value: 'transfer', label: Text('انتقال'), icon: Icon(Icons.swap_horiz)),
                     ],
                     selected: {k},
                     onSelectionChanged: (s) => set(() => k = s.first),
@@ -155,10 +158,21 @@ Future<void> editTx(BuildContext context, Repo repo,
                   gap(),
                   DropdownButtonFormField<String?>(
                     initialValue: accountId,
-                    decoration: const InputDecoration(labelText: 'حساب', border: OutlineInputBorder()),
+                    decoration: InputDecoration(labelText: transfer ? 'از حساب' : 'حساب', border: const OutlineInputBorder()),
                     items: [for (final a in accounts) DropdownMenuItem(value: a.id, child: Text(a.name))],
                     onChanged: (v) => accountId = v,
                   ),
+                  if (transfer) ...[
+                    gap(),
+                    DropdownButtonFormField<String?>(
+                      initialValue: toAccountId,
+                      decoration: const InputDecoration(labelText: 'به حساب', border: OutlineInputBorder()),
+                      items: [for (final a in accounts) DropdownMenuItem(value: a.id, child: Text(a.name))],
+                      validator: (v) => v == null ? 'حساب مقصد را انتخاب کنید' : (v == accountId ? 'مبدأ و مقصد یکی است' : null),
+                      onChanged: (v) => toAccountId = v,
+                    ),
+                  ],
+                  if (!transfer) ...[
                   gap(),
                   DropdownButtonFormField<String?>(
                     initialValue: party,
@@ -180,6 +194,7 @@ Future<void> editTx(BuildContext context, Repo repo,
                     ],
                     onChanged: (v) => cat = v,
                   ),
+                  ],
                   gap(),
                   TextFormField(
                     controller: desc,
@@ -209,8 +224,9 @@ Future<void> editTx(BuildContext context, Repo repo,
                   kind: k,
                   amount: parseAmount(amountC.text),
                   accountId: accountId!,
-                  partyId: party,
-                  categoryId: cat,
+                  toAccountId: k == 'transfer' ? toAccountId : null,
+                  partyId: k == 'transfer' ? null : party,
+                  categoryId: k == 'transfer' ? null : cat,
                   invoiceId: tx?.invoiceId ?? invoiceId,
                   description: desc.text.trim(),
                 );

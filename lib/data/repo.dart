@@ -16,8 +16,11 @@ class Account {
 }
 
 class Party {
-  Party(this.id, this.name, this.phone, this.note, this.balance);
+  Party(this.id, this.name, this.phone, this.note, this.balance, [this.opening = 0]);
   final String id, name, phone, note;
+
+  /// Balance carried in when the party was created (positive: owes us).
+  final int opening;
 
   /// Positive: the party owes us. Negative: we owe the party.
   final int balance;
@@ -57,8 +60,9 @@ class SavedFormula {
 
 class Tx {
   Tx(this.id, this.date, this.kind, this.amount, this.accountId, this.partyId,
-      this.categoryId, this.invoiceId, this.description);
-  final String id, date, kind; // kind: receipt | payment
+      this.categoryId, this.invoiceId, this.description, [this.toAccountId]);
+  final String id, date, kind; // kind: receipt | payment | transfer (accountId -> toAccountId)
+  final String? toAccountId;
   final int amount;
   final String accountId;
   final String? partyId, categoryId, invoiceId;
@@ -96,8 +100,11 @@ class InvoiceItem {
 /// The four kinds of invoice and how each one affects the party balance and
 /// the stock.
 class InvoiceKind {
-  const InvoiceKind(this.code, this.label, this.partyOwesUs, this.stockIn, this.paymentKind, this.partyLabel);
+  const InvoiceKind(this.code, this.label, this.partyOwesUs, this.stockIn, this.paymentKind, this.partyLabel, {this.ledger = true});
   final String code, label, partyLabel;
+
+  /// false for a pro-forma: it changes no balance, stock or report.
+  final bool ledger;
 
   /// true: the invoice total increases what the party owes us.
   final bool partyOwesUs;
@@ -114,6 +121,7 @@ const invoiceKinds = [
   InvoiceKind('purchase', 'فاکتور خرید', false, true, 'payment', 'تأمین‌کننده'),
   InvoiceKind('sale_return', 'برگشت از فروش', false, true, 'payment', 'مشتری'),
   InvoiceKind('purchase_return', 'برگشت از خرید', true, false, 'receipt', 'تأمین‌کننده'),
+  InvoiceKind('proforma', 'پیش‌فاکتور', true, false, 'receipt', 'مشتری', ledger: false),
 ];
 
 InvoiceKind invoiceKind(String code) =>
@@ -121,8 +129,11 @@ InvoiceKind invoiceKind(String code) =>
 
 class Invoice {
   Invoice(this.id, this.number, this.kind, this.date, this.partyId, this.discount,
-      this.note, this.subtotal, this.paid, this.taxPercent);
+      this.note, this.subtotal, this.paid, this.taxPercent, [this.refId]);
   final String id, kind, date, partyId, note;
+
+  /// For a pro-forma: the invoice it was turned into.
+  final String? refId;
   final int number, discount, subtotal, paid, taxPercent;
   int get net => subtotal - discount;
   int get tax => (net * taxPercent / 100).round();
@@ -262,8 +273,11 @@ class Repo extends ChangeNotifier {
   Future<List<Account>> accounts() async {
     final rows = await store.db.rawQuery('''
       SELECT a.id, a.name, a.kind, a.opening,
-        a.opening + COALESCE((SELECT SUM(CASE t.kind WHEN 'receipt' THEN t.amount ELSE -t.amount END)
-          FROM transactions t WHERE t.account_id=a.id AND t.deleted=0),0) AS balance
+        a.opening
+          + COALESCE((SELECT SUM(CASE t.kind WHEN 'receipt' THEN t.amount ELSE -t.amount END)
+              FROM transactions t WHERE t.account_id=a.id AND t.deleted=0),0)
+          + COALESCE((SELECT SUM(t.amount) FROM transactions t
+              WHERE t.to_account_id=a.id AND t.kind='transfer' AND t.deleted=0),0) AS balance
       FROM accounts a WHERE a.deleted=0 ORDER BY a.name''');
     return [
       for (final r in rows)
@@ -295,26 +309,28 @@ class Repo extends ChangeNotifier {
           WHERE it.invoice_id=i.id AND it.deleted=0),0) AS sub
       FROM invoices i WHERE i.deleted=0),
     tot AS (
-      SELECT party_id, kind, (sub-discount) + ROUND((sub-discount)*tax_percent/100.0) AS total FROM inv)''';
+      SELECT party_id, kind, (sub-discount) + ROUND((sub-discount)*tax_percent/100.0) AS total FROM inv
+      WHERE kind<>'proforma')''';
 
   Future<List<Party>> parties() async {
     final rows = await store.db.rawQuery('''
       $_invoiceTotals
-      SELECT p.id, p.name, p.phone, p.note,
-        COALESCE((SELECT SUM(total * CASE WHEN kind IN ('sale','purchase_return') THEN 1 ELSE -1 END)
+      SELECT p.id, p.name, p.phone, p.note, p.opening,
+        p.opening
+        + COALESCE((SELECT SUM(total * CASE WHEN kind IN ('sale','purchase_return') THEN 1 ELSE -1 END)
           FROM tot WHERE tot.party_id=p.id),0)
         + COALESCE((SELECT SUM(CASE t.kind WHEN 'payment' THEN t.amount ELSE -t.amount END)
-          FROM transactions t WHERE t.party_id=p.id AND t.deleted=0),0) AS balance
+          FROM transactions t WHERE t.party_id=p.id AND t.deleted=0 AND t.kind IN ('receipt','payment')),0) AS balance
       FROM parties p WHERE p.deleted=0 ORDER BY p.name''');
     return [
       for (final r in rows)
         Party(r['id'] as String, r['name'] as String, r['phone'] as String,
-            r['note'] as String, (r['balance'] as num).round())
+            r['note'] as String, (r['balance'] as num).round(), r['opening'] as int)
     ];
   }
 
-  Future<void> saveParty({String? id, required String name, String phone = '', String note = ''}) async {
-    await store.save('parties', {'id': ?id, 'name': name, 'phone': phone, 'note': note});
+  Future<void> saveParty({String? id, required String name, String phone = '', String note = '', int opening = 0}) async {
+    await store.save('parties', {'id': ?id, 'name': name, 'phone': phone, 'note': note, 'opening': opening});
     changed();
   }
 
@@ -359,7 +375,7 @@ class Repo extends ChangeNotifier {
       SELECT p.*, p.opening_stock + COALESCE((
         SELECT SUM(it.qty * CASE WHEN i.kind IN ('purchase','sale_return') THEN 1 ELSE -1 END)
         FROM invoice_items it JOIN invoices i ON i.id=it.invoice_id
-        WHERE it.product_id=p.id AND it.deleted=0 AND i.deleted=0),0) AS stock,
+        WHERE it.product_id=p.id AND it.deleted=0 AND i.deleted=0 AND i.kind<>'proforma'),0) AS stock,
         COALESCE((SELECT c.unit_cost FROM costings c WHERE c.product_id=p.id AND c.deleted=0),0) AS cost_price
       FROM products p WHERE p.deleted=0 ORDER BY p.name''');
     return [
@@ -409,7 +425,7 @@ class Repo extends ChangeNotifier {
   Future<List<Tx>> transactions({String? accountId, String? partyId, String? from, String? toExclusive, int? limit}) async {
     final where = <String>['deleted=0'];
     final args = <Object?>[];
-    if (accountId != null) { where.add('account_id=?'); args.add(accountId); }
+    if (accountId != null) { where.add('(account_id=? OR to_account_id=?)'); args..add(accountId)..add(accountId); }
     if (partyId != null) { where.add('party_id=?'); args.add(partyId); }
     if (from != null) { where.add('date>=?'); args.add(from); }
     if (toExclusive != null) { where.add('date<?'); args.add(toExclusive); }
@@ -419,7 +435,7 @@ class Repo extends ChangeNotifier {
       for (final r in rows)
         Tx(r['id'] as String, r['date'] as String, r['kind'] as String, r['amount'] as int,
             r['account_id'] as String, r['party_id'] as String?, r['category_id'] as String?,
-            r['invoice_id'] as String?, r['description'] as String)
+            r['invoice_id'] as String?, r['description'] as String, r['to_account_id'] as String?)
     ];
   }
 
@@ -433,13 +449,14 @@ class Repo extends ChangeNotifier {
     String? categoryId,
     String? invoiceId,
     String description = '',
+    String? toAccountId,
   }) async {
     final txId = id ?? AppDb.newId();
     await store.save('transactions', {
       'id': txId,
       'date': date, 'kind': kind, 'amount': amount, 'account_id': accountId,
       'party_id': partyId, 'category_id': categoryId, 'invoice_id': invoiceId,
-      'description': description,
+      'description': description, 'to_account_id': toAccountId,
     });
     changed();
     return txId;
@@ -465,7 +482,7 @@ class Repo extends ChangeNotifier {
       for (final r in rows)
         Invoice(r['id'] as String, r['number'] as int, r['kind'] as String, r['date'] as String,
             r['party_id'] as String, r['discount'] as int, r['note'] as String,
-            (r['subtotal'] as num).round(), (r['paid'] as num).round(), r['tax_percent'] as int)
+            (r['subtotal'] as num).round(), (r['paid'] as num).round(), r['tax_percent'] as int, r['ref_id'] as String?)
     ];
   }
 
@@ -479,9 +496,37 @@ class Repo extends ChangeNotifier {
     ];
   }
 
-  Future<int> nextInvoiceNumber() async {
-    final r = await store.db.rawQuery('SELECT COALESCE(MAX(number),0)+1 AS n FROM invoices');
+  /// Next free number. Pro-formas have their own series so real invoices
+  /// never get gaps in their numbering.
+  Future<int> nextInvoiceNumber([String kind = 'sale']) async {
+    final r = await store.db.rawQuery(
+        "SELECT COALESCE(MAX(number),0)+1 AS n FROM invoices WHERE deleted=0 AND ((kind='proforma')=?)", [kind == 'proforma' ? 1 : 0]);
     return r.first['n'] as int;
+  }
+
+  /// Makes a sale invoice from a pro-forma (same party, items, discount and
+  /// VAT; dated today) and links the two. Returns the new invoice's id.
+  Future<String> convertProforma(String proformaId) async {
+    final pro = (await invoices()).firstWhere((i) => i.id == proformaId);
+    if (pro.kind != 'proforma') throw StateError('این سند پیش‌فاکتور نیست.');
+    if (pro.refId != null) throw StateError('این پیش‌فاکتور قبلاً به فاکتور تبدیل شده است.');
+    final items = await invoiceItems(proformaId);
+    final id = await saveInvoice(
+      number: await nextInvoiceNumber('sale'),
+      kind: 'sale',
+      date: todayIso(),
+      partyId: pro.partyId,
+      discount: pro.discount,
+      taxPercent: pro.taxPercent,
+      note: pro.note,
+      items: items,
+    );
+    await store.save('invoices', {
+      ...(await store.db.query('invoices', where: 'id=?', whereArgs: [proformaId])).first,
+      'ref_id': id,
+    });
+    changed();
+    return id;
   }
 
   /// Creates or replaces an invoice together with its items.
@@ -498,9 +543,11 @@ class Repo extends ChangeNotifier {
   }) async {
     final invId = id ?? AppDb.newId();
     await store.db.transaction((tx) async {
+      // Editing keeps the link between a pro-forma and the invoice made from it.
+      final keepRef = id == null ? null : (await tx.query('invoices', columns: ['ref_id'], where: 'id=?', whereArgs: [id])).firstOrNull?['ref_id'];
       await store.save('invoices', {
         'id': invId, 'number': number, 'kind': kind, 'date': date,
-        'party_id': partyId, 'discount': discount, 'tax_percent': taxPercent, 'note': note,
+        'party_id': partyId, 'discount': discount, 'tax_percent': taxPercent, 'note': note, 'ref_id': keepRef,
       }, exec: tx);
       final old = await tx.query('invoice_items',
           columns: ['id'], where: 'invoice_id=? AND deleted=0', whereArgs: [invId]);
@@ -679,7 +726,7 @@ class Repo extends ChangeNotifier {
     final rows = await store.db.rawQuery('''
       SELECT COALESCE(c.name,'بدون دسته‌بندی') AS name, t.kind AS kind, SUM(t.amount) AS total
       FROM transactions t LEFT JOIN categories c ON c.id=t.category_id
-      WHERE t.deleted=0 AND t.date>=? AND t.date<?
+      WHERE t.deleted=0 AND t.kind IN ('receipt','payment') AND t.date>=? AND t.date<?
       GROUP BY c.id, t.kind ORDER BY total DESC''', [from, toExclusive]);
     var income = 0, expense = 0;
     final list = <(String, String, int)>[];
@@ -755,6 +802,7 @@ class Repo extends ChangeNotifier {
   Future<StatementData> statement(String partyId, {String? from, String? toExclusive}) async {
     final items = <(String, int, String, int)>[]; // date, order, description, signed amount
     for (final i in await invoices(partyId: partyId)) {
+      if (!i.info.ledger) continue;
       items.add((i.date, 0, '${i.info.label} ${faDigits('${i.number}')}', i.info.partyOwesUs ? i.total : -i.total));
     }
     for (final t in await transactions(partyId: partyId)) {
@@ -765,8 +813,10 @@ class Repo extends ChangeNotifier {
       final c = a.$1.compareTo(b.$1);
       return c != 0 ? c : a.$2.compareTo(b.$2);
     });
-    var running = 0;
-    var opening = 0;
+    // A party can start with a balance (e.g. when moving from another system).
+    final party = (await parties()).where((p) => p.id == partyId).firstOrNull;
+    var running = party?.opening ?? 0;
+    var opening = running;
     final rows = <StatementRow>[];
     for (final it in items) {
       final before = from != null && it.$1.compareTo(from) < 0;
@@ -837,6 +887,7 @@ class Repo extends ChangeNotifier {
       }
 
       await scale('accounts', ['opening']);
+      await scale('parties', ['opening']);
       await scale('transactions', ['amount']);
       await scale('invoices', ['discount']);
       await scale('invoice_items', ['unit_price']);

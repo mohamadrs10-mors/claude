@@ -104,9 +104,8 @@ class DashboardPage extends StatelessWidget {
                             for (final t in d.recent)
                               ListTile(
                                 contentPadding: EdgeInsets.zero,
-                                leading: Icon(t.kind == 'receipt' ? Icons.south_west : Icons.north_east,
-                                    color: t.kind == 'receipt' ? green : red),
-                                title: Text('${t.kind == 'receipt' ? 'دریافت' : 'پرداخت'} ${moneyC(t.amount)}'),
+                                leading: Icon(txIcon(t.kind), color: t.kind == 'receipt' ? green : (t.kind == 'transfer' ? Colors.blueGrey : red)),
+                                title: Text('${txKindLabel(t.kind)} ${moneyC(t.amount)}'),
                                 subtitle: Text([
                                   jalaliText(t.date),
                                   d.names[t.partyId] ?? d.names[t.accountId] ?? '',

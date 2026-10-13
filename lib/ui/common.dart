@@ -189,6 +189,10 @@ class _AmountFieldState extends State<AmountField> {
 
 Widget gap([double h = 12]) => SizedBox(height: h);
 
+IconData txIcon(String kind) => switch (kind) { 'receipt' => Icons.south_west, 'transfer' => Icons.swap_horiz, _ => Icons.north_east };
+
+Color txColor(String kind) => switch (kind) { 'receipt' => Colors.green, 'transfer' => Colors.blueGrey, _ => Colors.redAccent };
+
 // ---- shared building blocks ------------------------------------------------
 
 /// Rounded search box used above lists.

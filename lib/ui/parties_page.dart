@@ -78,6 +78,7 @@ Future<void> editParty(BuildContext c, Repo repo, [Party? p]) async {
   final name = TextEditingController(text: p?.name);
   final phone = TextEditingController(text: p?.phone);
   final note = TextEditingController(text: p?.note);
+  final opening = TextEditingController(text: p == null || p.opening == 0 ? '' : '${p.opening}');
   final key = GlobalKey<FormState>();
   await showDialog(
     context: c,
@@ -102,6 +103,13 @@ Future<void> editParty(BuildContext c, Repo repo, [Party? p]) async {
             controller: note,
             decoration: const InputDecoration(labelText: 'یادداشت', border: OutlineInputBorder()),
           ),
+          gap(),
+          AmountField(
+            controller: opening,
+            label: 'مانده اول دوره',
+            negative: true,
+            helper: 'مثبت: او به شما بدهکار است • منفی: شما به او بدهکارید',
+          ),
         ]),
       ),
       actions: [
@@ -124,7 +132,7 @@ Future<void> editParty(BuildContext c, Repo repo, [Party? p]) async {
         FilledButton(
           onPressed: () async {
             if (!key.currentState!.validate()) return;
-            await repo.saveParty(id: p?.id, name: name.text.trim(), phone: phone.text.trim(), note: note.text.trim());
+            await repo.saveParty(id: p?.id, name: name.text.trim(), phone: phone.text.trim(), note: note.text.trim(), opening: parseAmount(opening.text));
             if (dc.mounted) Navigator.pop(dc);
           },
           child: const Text('ذخیره'),

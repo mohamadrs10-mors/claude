@@ -17,6 +17,7 @@ Future<Repo> newRepo() async {
 }
 
 void main() {
+  ledgerTests();
   costingTests();
   salesByPartyTests();
 
@@ -232,5 +233,93 @@ void costingTests() {
     expect(await a.formulas(), isEmpty);
     expect(await a.costSheet(p.id), isNull);
     expect((await a.products()).single.costPrice, 0);
+  });
+}
+
+void ledgerTests() {
+  test('transfers between accounts move money without touching income, expense or parties', () async {
+    final r = await newRepo();
+    await r.saveAccount(name: 'صندوق', kind: 'cash', opening: 1000);
+    await r.saveAccount(name: 'بانک', kind: 'bank', opening: 0);
+    final accs = {for (final a in await r.accounts()) a.name: a.id};
+    await r.saveTx(date: '2025-01-05', kind: 'transfer', amount: 400, accountId: accs['صندوق']!, toAccountId: accs['بانک'], description: 'واریز');
+    final bal = {for (final a in await r.accounts()) a.name: a.balance};
+    expect(bal, {'صندوق': 600, 'بانک': 400});
+    expect(bal.values.reduce((a, b) => a + b), 1000); // nothing created or lost
+
+    final rep = await r.report('2025-01-01', '2025-02-01');
+    expect(rep.income, 0);
+    expect(rep.expense, 0);
+
+    // The transfer shows up under both accounts.
+    expect((await r.transactions(accountId: accs['صندوق'])).single.kind, 'transfer');
+    expect((await r.transactions(accountId: accs['بانک'])).single.toAccountId, accs['بانک']);
+
+    await r.saveTx(date: '2025-01-06', kind: 'receipt', amount: 100, accountId: accs['بانک']!);
+    expect((await r.accounts()).firstWhere((a) => a.name == 'بانک').balance, 500);
+    await r.deleteTx((await r.transactions(accountId: accs['صندوق'])).single.id);
+    expect((await r.accounts()).firstWhere((a) => a.name == 'صندوق').balance, 1000);
+  });
+
+  test('a party can start with a balance, and it flows into balance, statement and conversion', () async {
+    final r = await newRepo();
+    await r.saveAccount(name: 'صندوق', kind: 'cash', opening: 0);
+    final acc = (await r.accounts()).single;
+    await r.saveParty(name: 'بدهکار قدیمی', opening: 5000);
+    await r.saveParty(name: 'بستانکار قدیمی', opening: -3000);
+    final ps = {for (final p in await r.parties()) p.name: p};
+    expect(ps['بدهکار قدیمی']!.balance, 5000);
+    expect(ps['بستانکار قدیمی']!.balance, -3000);
+    expect(ps['بدهکار قدیمی']!.opening, 5000);
+
+    await r.saveTx(date: '2025-02-01', kind: 'receipt', amount: 2000, accountId: acc.id, partyId: ps['بدهکار قدیمی']!.id);
+    final st = await r.statement(ps['بدهکار قدیمی']!.id);
+    expect(st.opening, 5000);
+    expect(st.rows.single.balance, 3000);
+    expect(st.closing, 3000);
+    // In a later period the opening is the party's start plus everything before.
+    final later = await r.statement(ps['بدهکار قدیمی']!.id, from: '2025-03-01');
+    expect(later.opening, 3000);
+    expect(later.rows, isEmpty);
+
+    await r.convertAmounts(10);
+    expect((await r.parties()).firstWhere((p) => p.name == 'بدهکار قدیمی').balance, 30000);
+  });
+
+  test('pro-forma changes no balance, stock or report; converting makes a real invoice', () async {
+    final r = await newRepo();
+    await r.saveParty(name: 'مشتری');
+    final p = (await r.parties()).single;
+    await r.saveProduct(name: 'کالا', salePrice: 100, openingStock: 10);
+    final prod = (await r.products()).single;
+
+    // Pro-forma numbers are their own series.
+    await r.saveInvoice(number: await r.nextInvoiceNumber('proforma'), kind: 'proforma', date: '2025-04-01', partyId: p.id, discount: 20, taxPercent: 10, note: 'n',
+        items: [InvoiceItem('کالا', 4, 100, productId: prod.id)]);
+    expect(await r.nextInvoiceNumber('proforma'), 2);
+    expect(await r.nextInvoiceNumber('sale'), 1);
+    final pro = (await r.invoices()).single;
+    expect(pro.total, 418); // (400 - 20) * 1.1
+
+    expect((await r.parties()).single.balance, 0);
+    expect((await r.products()).single.stock, 10);
+    expect((await r.productSales('2025-01-01', '2026-01-01')), isEmpty);
+    expect((await r.statement(p.id)).rows, isEmpty);
+
+    final saleId = await r.convertProforma(pro.id);
+    final all = {for (final i in await r.invoices()) i.id: i};
+    expect(all[saleId]!.kind, 'sale');
+    expect(all[saleId]!.number, 1);
+    expect(all[saleId]!.total, 418);
+    expect(all[pro.id]!.refId, saleId);
+    expect((await r.parties()).single.balance, 418);
+    expect((await r.products()).single.stock, 6);
+    expect(() => r.convertProforma(pro.id), throwsStateError); // only once
+
+    // Editing the pro-forma later keeps its link.
+    await r.saveInvoice(id: pro.id, number: pro.number, kind: 'proforma', date: pro.date, partyId: p.id, discount: 0, note: 'x',
+        items: [InvoiceItem('کالا', 1, 100)]);
+    expect((await r.invoices()).firstWhere((i) => i.id == pro.id).refId, saleId);
+    expect(() => r.convertProforma(saleId), throwsStateError); // not a pro-forma
   });
 }

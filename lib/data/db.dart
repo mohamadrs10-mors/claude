@@ -21,7 +21,7 @@ const syncTables = [
   'transactions',
 ];
 
-const _schemaVersion = 3;
+const _schemaVersion = 4;
 
 const _v2Tables = [
   '''CREATE TABLE products (
@@ -57,6 +57,14 @@ const _v3Tables = [
     name TEXT NOT NULL, expression TEXT NOT NULL)''',
 ];
 
+/// Upgrade 3 -> 4: opening balance of a party, transfers between accounts,
+/// the link from a pro-forma to the invoice made from it.
+const _migrate3to4 = [
+  'ALTER TABLE parties ADD COLUMN opening INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE transactions ADD COLUMN to_account_id TEXT',
+  'ALTER TABLE invoices ADD COLUMN ref_id TEXT',
+];
+
 /// Upgrade 2 -> 3: cost sheets and saved price formulas.
 const _migrate2to3 = [
   ..._v3Tables,
@@ -83,7 +91,8 @@ final _schema = [
   '''CREATE TABLE parties (
     id TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
     device_id TEXT NOT NULL, seq INTEGER NOT NULL,
-    name TEXT NOT NULL, phone TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '')''',
+    name TEXT NOT NULL, phone TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '',
+    opening INTEGER NOT NULL DEFAULT 0)''',
   '''CREATE TABLE categories (
     id TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
     device_id TEXT NOT NULL, seq INTEGER NOT NULL,
@@ -93,7 +102,7 @@ final _schema = [
     device_id TEXT NOT NULL, seq INTEGER NOT NULL,
     number INTEGER NOT NULL, kind TEXT NOT NULL, date TEXT NOT NULL, party_id TEXT NOT NULL,
     discount INTEGER NOT NULL DEFAULT 0, note TEXT NOT NULL DEFAULT '',
-    tax_percent INTEGER NOT NULL DEFAULT 0)''',
+    tax_percent INTEGER NOT NULL DEFAULT 0, ref_id TEXT)''',
   '''CREATE TABLE invoice_items (
     id TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
     device_id TEXT NOT NULL, seq INTEGER NOT NULL,
@@ -105,7 +114,8 @@ final _schema = [
     id TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
     device_id TEXT NOT NULL, seq INTEGER NOT NULL,
     date TEXT NOT NULL, kind TEXT NOT NULL, amount INTEGER NOT NULL, account_id TEXT NOT NULL,
-    party_id TEXT, category_id TEXT, invoice_id TEXT, description TEXT NOT NULL DEFAULT '')''',
+    party_id TEXT, category_id TEXT, invoice_id TEXT, description TEXT NOT NULL DEFAULT '',
+    to_account_id TEXT)''',
   'CREATE INDEX idx_tx_date ON transactions(date)',
   'CREATE INDEX idx_tx_party ON transactions(party_id)',
   'CREATE INDEX idx_items_inv ON invoice_items(invoice_id)',
@@ -142,6 +152,11 @@ class AppDb {
           }
           if (from < 3) {
             for (final q in _migrate2to3) {
+              await db.execute(q);
+            }
+          }
+          if (from < 4) {
+            for (final q in _migrate3to4) {
               await db.execute(q);
             }
           }

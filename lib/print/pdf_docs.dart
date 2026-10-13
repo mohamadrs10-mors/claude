@@ -160,7 +160,7 @@ class PdfDocs {
             cols: const [Col.center, Col.text, Col.number, Col.number, Col.number],
             flex: const [1.4, 3.4, 1.6, 1.6, 2],
             rows: [
-              if (from != null && d.opening != 0) ['', 'مانده از قبل', '', '', money(d.opening)],
+              if (d.opening != 0) ['', 'مانده از قبل', '', '', money(d.opening)],
               for (final r in d.rows)
                 [jalaliText(r.date), r.description, r.debit > 0 ? money(r.debit) : '', r.credit > 0 ? money(r.credit) : '', money(r.balance)],
             ],
@@ -337,8 +337,8 @@ class PdfDocs {
           ]),
         pw.SizedBox(height: 30),
         pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceAround, children: [
-          _text(inv.kind.startsWith('sale') ? 'امضای فروشنده' : 'امضای خریدار'),
-          _text(inv.kind.startsWith('sale') ? 'امضای خریدار' : 'امضای فروشنده'),
+          _text(inv.kind.startsWith('sale') || inv.kind == 'proforma' ? 'امضای فروشنده' : 'امضای خریدار'),
+          _text(inv.kind.startsWith('sale') || inv.kind == 'proforma' ? 'امضای خریدار' : 'امضای فروشنده'),
         ]),
         if (footer.isNotEmpty) ...[
           pw.SizedBox(height: 18),

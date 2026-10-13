@@ -64,6 +64,9 @@ String plainNum(num v, {int decimals = 4}) {
 /// Amount with the currency name, e.g. "۱.۲۰۰ تومان".
 String moneyC(num v) => '${money(v)} $currencyLabel';
 
+/// Persian name of a transaction kind: receipt, payment or transfer.
+String txKindLabel(String kind) => switch (kind) { 'receipt' => 'دریافت', 'transfer' => 'انتقال', _ => 'پرداخت' };
+
 const monthNames = [
   'فروردین', 'اردیبهشت', 'خرداد', 'تیر', 'مرداد', 'شهریور',
   'مهر', 'آبان', 'آذر', 'دی', 'بهمن', 'اسفند',

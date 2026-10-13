@@ -102,6 +102,9 @@ ReportDoc buyersDoc(Product p, List<PartySales> rows, String period) {
 ReportDoc transactionsDoc(List<Tx> txs, {required Map<String, String> accounts, required Map<String, String> parties, required Map<String, String> categories, String filter = ''}) {
   final receipts = txs.where((t) => t.kind == 'receipt').fold<int>(0, (a, t) => a + t.amount);
   final payments = txs.where((t) => t.kind == 'payment').fold<int>(0, (a, t) => a + t.amount);
+  String account(Tx t) => t.kind == 'transfer'
+      ? 'از ${accounts[t.accountId] ?? ''} به ${accounts[t.toAccountId] ?? ''}'
+      : (accounts[t.accountId] ?? '');
   return ReportDoc(
     title: 'فهرست تراکنش‌ها',
     subtitle: filter,
@@ -115,8 +118,8 @@ ReportDoc transactionsDoc(List<Tx> txs, {required Map<String, String> accounts, 
           for (final t in txs)
             [
               jalaliText(t.date),
-              t.kind == 'receipt' ? 'دریافت' : 'پرداخت',
-              accounts[t.accountId] ?? '',
+              txKindLabel(t.kind),
+              account(t),
               parties[t.partyId] ?? '',
               categories[t.categoryId] ?? '',
               t.description,
