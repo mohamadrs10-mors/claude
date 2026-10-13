@@ -32,7 +32,8 @@ jobs:
           channel: stable
           cache: true
       - run: flutter pub get
-      - run: flutter build apk --release
+      # MASTER_KEY_HASH is optional: without the secret the build has no master recovery.
+      - run: flutter build apk --release --dart-define=MASTER_KEY_HASH=${{ secrets.MASTER_KEY_HASH }}
       - uses: actions/upload-artifact@v4
         with:
           name: accounting-android-apk
@@ -48,7 +49,7 @@ jobs:
           channel: stable
           cache: true
       - run: flutter pub get
-      - run: flutter build windows --release
+      - run: flutter build windows --release --dart-define=MASTER_KEY_HASH=${{ secrets.MASTER_KEY_HASH }}
       - uses: actions/upload-artifact@v4
         with:
           name: accounting-windows

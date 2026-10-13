@@ -6,6 +6,7 @@ import 'package:simple_accounting/data/app_lock.dart';
 import 'package:simple_accounting/data/backup_service.dart';
 import 'package:simple_accounting/data/company_manager.dart';
 import 'package:simple_accounting/data/device_prefs.dart';
+import 'package:simple_accounting/data/recovery.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
@@ -88,6 +89,118 @@ void main() {
       now = now.add(const Duration(minutes: 3));
       lock.appResumed();
       expect(lock.isUnlocked('a'), isFalse);
+    });
+  });
+
+
+  group('PIN recovery', () {
+    var now = DateTime(2025, 1, 1, 12);
+    AppLock make({DevicePrefs? prefs, String? master}) => AppLock(prefs ?? DevicePrefs.memory(), clock: () => now, masterHash: master);
+
+    test('setting a PIN returns a recovery key that is stored only as a hash', () async {
+      final prefs = DevicePrefs.memory();
+      final lock = make(prefs: prefs);
+      final key = await lock.setPin('a', '1234');
+      expect(key, matches(RegExp(r'^[A-HJKMNP-Z2-9]{4}(-[A-HJKMNP-Z2-9]{4}){3}$')));
+      expect(lock.hasRecoveryKey('a'), isTrue);
+      expect(prefs.get('lockrk_a')!.contains(key), isFalse);
+      expect(prefs.get('lockrk_a')!.contains(Recovery.normalize(key)), isFalse);
+      expect(make(prefs: prefs).hasRecoveryKey('a'), isTrue); // survives a restart
+    });
+
+    test('the recovery key resets the PIN; case and dashes do not matter; the old key and PIN die', () async {
+      final lock = make();
+      final key = await lock.setPin('a', '1111');
+      lock.lockAll();
+      final typed = key.toLowerCase().replaceAll('-', ' ');
+      final fresh = await lock.recover('a', typed, '2222');
+      expect(fresh, isNotNull);
+      expect(fresh, isNot(key));
+      expect(lock.isUnlocked('a'), isTrue); // recovering signs you in
+      lock.lockAll();
+      expect(lock.unlock('a', '1111'), isFalse);
+      expect(lock.unlock('a', '2222'), isTrue);
+      lock.lockAll();
+      expect(await lock.recover('a', key, '3333'), isNull); // the used key is gone
+      expect(await lock.recover('a', fresh!, '3333'), isNotNull);
+    });
+
+    test('wrong keys are limited like wrong PINs and a bad new PIN is refused', () async {
+      now = DateTime(2025, 1, 1, 12);
+      final lock = make();
+      final key = await lock.setPin('a', '1111');
+      lock.lockAll();
+      for (var i = 0; i < 5; i++) {
+        expect(await lock.recover('a', 'AAAA-BBBB-CCCC-DDDD', '2222'), isNull);
+      }
+      expect(lock.waitSeconds, greaterThan(25));
+      expect(await lock.recover('a', key, '2222'), isNull); // even the right key waits
+      now = now.add(const Duration(seconds: 31));
+      await expectLater(lock.recover('a', key, '12'), throwsFormatException);
+      expect(await lock.recover('a', key, '2222'), isNotNull);
+    });
+
+    test('a PIN made before recovery keys existed can get one while signed in', () async {
+      final prefs = DevicePrefs.memory();
+      final lock = make(prefs: prefs);
+      // Old layout: only lock_<id>, no key.
+      final salt = Recovery.newSalt();
+      await lock.setPin('a', '1234');
+      await prefs.set('lockrk_a', ''); // pretend it never had one
+      expect(lock.hasPin('a'), isTrue);
+      expect(lock.hasRecoveryKey('a'), isFalse);
+      expect(await lock.recover('a', 'ANYTHING', '2222'), isNull);
+      expect(salt, isNotEmpty);
+      final key = await lock.newRecoveryKey('a');
+      expect(lock.hasRecoveryKey('a'), isTrue);
+      expect(await lock.recover('a', key, '5555'), isNotNull);
+    });
+
+    test('clearing the PIN also clears the recovery key', () async {
+      final lock = make();
+      await lock.setPin('a', '1234');
+      await lock.clearPin('a');
+      expect(lock.hasRecoveryKey('a'), isFalse);
+    });
+
+    test('the owner master phrase works for any company, only in a build that has its hash', () async {
+      const phrase = 'MASTER-TEST-PHRASE-2025';
+      final enabled = make(master: Recovery.masterHash(phrase));
+      expect(enabled.masterEnabled, isTrue);
+      await enabled.setPin('a', '1111');
+      await enabled.setPin('b', '2222');
+      enabled.lockAll();
+      expect(await enabled.recover('a', 'wrong-phrase', '9999'), isNull);
+      expect(await enabled.recover('a', 'master test phrase 2025', '9999'), isNotNull); // normalised
+      enabled.lockAll();
+      expect(enabled.unlock('a', '9999'), isTrue);
+      expect(await enabled.recover('b', phrase, '8888'), isNotNull); // another company, no stored key needed
+
+      // A normal build has no master recovery at all, even if the phrase is known.
+      final plain = make();
+      expect(plain.masterEnabled, isFalse);
+      await plain.setPin('c', '1111');
+      plain.lockAll();
+      expect(await plain.recover('c', phrase, '9999'), isNull);
+    });
+
+    test('helper functions', () {
+      expect(Recovery.normalize(' ab-cd 12!'), 'ABCD12');
+      expect(Recovery.masterHash('abc-def'), Recovery.masterHash('ABCDEF'));
+      expect(Recovery.masterHash('abc'), isNot(Recovery.masterHash('abd')));
+      expect(Recovery.masterHash('x'), hasLength(64));
+      expect(Recovery.matches(Recovery.store('K7QX-2M9P'), 'k7qx 2m9p'), isTrue);
+      expect(Recovery.matches(Recovery.store('K7QX-2M9P'), 'K7QX-2M9Q'), isFalse);
+      expect(Recovery.matches('', 'K7QX'), isFalse);
+      expect(Recovery.matches('garbage', 'K7QX'), isFalse);
+      expect(Recovery.newKey(groups: 6), matches(RegExp(r'^([A-Z2-9]{4}-){5}[A-Z2-9]{4}$')));
+
+      final prefs = <String, dynamic>{'theme_mode': 'dark', 'lock_a': 'x', 'lockrk_a': 'y', 'lock_b': 'x', 'lockrk_b': 'y'};
+      expect(Recovery.stripLocks(prefs, companyId: 'a'), 2);
+      expect(prefs.keys.toSet(), {'theme_mode', 'lock_b', 'lockrk_b'});
+      expect(Recovery.stripLocks(prefs), 2);
+      expect(prefs, {'theme_mode': 'dark'});
+      expect(Recovery.stripLocks(prefs), 0);
     });
   });
 

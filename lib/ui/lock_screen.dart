@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../data/app_lock.dart';
 import '../data/company_manager.dart';
 import '../util/format.dart';
+import 'recovery_dialogs.dart';
 
 /// Shown instead of the app while the active company is locked with a PIN.
 class LockScreen extends StatefulWidget {
@@ -57,6 +58,10 @@ class _LockScreenState extends State<LockScreen> {
               ),
               const SizedBox(height: 12),
               SizedBox(width: double.infinity, child: FilledButton(onPressed: _try, child: const Text('ورود'))),
+              TextButton(
+                onPressed: () => showRecoverPin(context, widget.lock, widget.companies.activeId),
+                child: const Text('رمز را فراموش کرده‌ام'),
+              ),
               if (c.companies.length > 1) ...[
                 const SizedBox(height: 16),
                 PopupMenuButton<String>(

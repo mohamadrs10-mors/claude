@@ -11,6 +11,7 @@ import '../data/csv.dart';
 import '../data/repo.dart';
 import '../util/format.dart';
 import 'common.dart';
+import 'recovery_dialogs.dart';
 
 /// Logo of the business, printed on invoices and reports. Stored as a synced
 /// setting (base64), so every device prints the same header.
@@ -343,8 +344,16 @@ class _SecuritySectionState extends State<SecuritySection> {
     }
     final pin = await _askPin('رمز جدید', confirmField: true);
     if (pin == null) return;
-    await lock.setPin(id, pin);
-    if (mounted) toast(context, 'رمز تنظیم شد.');
+    final key = await lock.setPin(id, pin);
+    if (mounted) await showRecoveryKey(context, key);
+  }
+
+  Future<void> _newKey() async {
+    final pin = await _askPin('رمز فعلی را برای ساخت کلید جدید وارد کنید');
+    if (pin == null) return;
+    if (!lock.check(id, pin)) return mounted ? toast(context, 'رمز اشتباه است.') : null;
+    final key = await lock.newRecoveryKey(id);
+    if (mounted) await showRecoveryKey(context, key, title: 'کلید بازیابی تازه');
   }
 
   Future<void> _remove() async {
@@ -367,11 +376,20 @@ class _SecuritySectionState extends State<SecuritySection> {
               FilledButton.tonalIcon(onPressed: _set, icon: const Icon(Icons.password), label: Text(lock.hasPin(id) ? 'تغییر رمز' : 'تعیین رمز')),
               if (lock.hasPin(id)) ...[
                 OutlinedButton.icon(onPressed: () => lock.lock(id), icon: const Icon(Icons.lock_outline), label: const Text('قفل کردن الان')),
+                OutlinedButton.icon(onPressed: _newKey, icon: const Icon(Icons.key_outlined), label: Text(lock.hasRecoveryKey(id) ? 'کلید بازیابی جدید' : 'ساخت کلید بازیابی')),
                 TextButton(onPressed: _remove, child: const Text('حذف رمز')),
               ],
             ]),
+            if (lock.hasPin(id)) ...[
+              const SizedBox(height: 8),
+              Row(children: [
+                Icon(lock.hasRecoveryKey(id) ? Icons.verified_outlined : Icons.warning_amber_rounded, size: 18, color: lock.hasRecoveryKey(id) ? Colors.green : Colors.orange),
+                const SizedBox(width: 6),
+                Expanded(child: Text(lock.hasRecoveryKey(id) ? 'کلید بازیابی ساخته شده است.' : 'برای این رمز هنوز کلید بازیابی ساخته نشده؛ همین حالا یکی بسازید.')),
+              ]),
+            ],
             const SizedBox(height: 6),
-            Text('رمز فقط روی همین دستگاه و برای همین شرکت ذخیره می‌شود (به‌صورت رمزگذاری‌شده) و همگام نمی‌شود. اگر رمز را فراموش کنید، راه بازیابی ندارد؛ از اطلاعات پشتیبان بگیرید.',
+            Text('رمز فقط روی همین دستگاه و برای همین شرکت ذخیره می‌شود (به‌صورت رمزگذاری‌شده) و همگام نمی‌شود. اگر رمز را فراموش کنید، با «کلید بازیابی» (که هنگام تعیین رمز نشان داده می‌شود) می‌توانید رمز تازه بسازید. رمز اطلاعات را رمزگذاری نمی‌کند و فقط ورود به برنامه را قفل می‌کند.',
                 style: Theme.of(context).textTheme.bodySmall),
           ]),
         ),
