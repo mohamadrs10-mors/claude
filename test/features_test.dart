@@ -17,6 +17,7 @@ Future<Repo> newRepo() async {
 }
 
 void main() {
+  financeTests();
   ledgerTests();
   costingTests();
   salesByPartyTests();
@@ -321,5 +322,159 @@ void ledgerTests() {
         items: [InvoiceItem('کالا', 1, 100)]);
     expect((await r.invoices()).firstWhere((i) => i.id == pro.id).refId, saleId);
     expect(() => r.convertProforma(saleId), throwsStateError); // not a pro-forma
+  });
+}
+
+void financeTests() {
+  Future<String> party(Repo r, String name, {int opening = 0}) async {
+    await r.saveParty(name: name, opening: opening);
+    return (await r.parties()).firstWhere((p) => p.name == name).id;
+  }
+
+  test('VAT report: output minus input, returns negative, pro-forma ignored', () async {
+    final r = await newRepo();
+    final c = await party(r, 'مشتری');
+    final s = await party(r, 'تأمین‌کننده');
+    Future<void> inv(int n, String kind, String date, String pid, int price, {int tax = 10}) => r.saveInvoice(
+        number: n, kind: kind, date: date, partyId: pid, discount: 0, taxPercent: tax, note: '', items: [InvoiceItem('x', 1, price)]);
+    await inv(1, 'sale', '2025-05-02', c, 1000);
+    await inv(2, 'sale_return', '2025-05-03', c, 200);
+    await inv(3, 'purchase', '2025-05-04', s, 500);
+    await inv(4, 'proforma', '2025-05-05', c, 9999);
+    await inv(5, 'sale', '2025-07-01', c, 777); // another period
+    final v = await r.vatReport('2025-05-01', '2025-06-01');
+    expect(v.lines.length, 3);
+    expect(v.outputTax, 100 - 20);
+    expect(v.inputTax, 50);
+    expect(v.payable, 30);
+    expect(v.salesBase, 800);
+    expect(v.purchasesBase, 500);
+    expect(v.lines.firstWhere((l) => l.kind == 'sale_return').tax, -20);
+  });
+
+  test('profit and loss: sales, cost of goods, other income and expenses', () async {
+    final r = await newRepo();
+    await r.saveAccount(name: 'صندوق', kind: 'cash', opening: 0);
+    final acc = (await r.accounts()).single.id;
+    await r.saveCategory(name: 'اجاره', kind: 'expense');
+    await r.saveCategory(name: 'حقوق', kind: 'expense');
+    await r.saveCategory(name: 'سود بانکی', kind: 'income');
+    final cats = {for (final c in await r.categories()) c.name: c.id};
+    final cust = await party(r, 'مشتری');
+    final supp = await party(r, 'تأمین‌کننده');
+    await r.saveProduct(name: 'کالا', salePrice: 300, buyPrice: 100, openingStock: 10);
+    final prod = (await r.products()).single.id;
+
+    await r.saveInvoice(number: 1, kind: 'purchase', date: '2025-01-10', partyId: supp, discount: 0, note: '', items: [InvoiceItem('کالا', 10, 200, productId: prod)]);
+    await r.saveInvoice(number: 2, kind: 'sale', date: '2025-02-10', partyId: cust, discount: 100, note: '',
+        items: [InvoiceItem('کالا', 5, 300, productId: prod), InvoiceItem('خدمات', 2, 50)]);
+    await r.saveInvoice(number: 3, kind: 'sale_return', date: '2025-02-12', partyId: cust, discount: 0, note: '', items: [InvoiceItem('کالا', 1, 300, productId: prod)]);
+
+    Future<void> tx(String kind, int amount, {String? cat, String? party}) =>
+        r.saveTx(date: '2025-02-15', kind: kind, amount: amount, accountId: acc, categoryId: cat == null ? null : cats[cat], partyId: party);
+    await tx('payment', 200, cat: 'اجاره');
+    await tx('payment', 300, cat: 'حقوق');
+    await tx('payment', 999, party: supp); // settles a supplier: not an expense
+    await tx('payment', 55); // no category, no person: reported as uncategorised
+    await tx('receipt', 40, cat: 'سود بانکی');
+    await tx('receipt', 123, party: cust); // settles a customer: not income
+
+    expect((await r.unitCosts('2026-01-01'))[prod], 150); // (10*100 + 10*200) / 20
+    final pl = await r.profitLoss('2025-02-01', '2025-03-01');
+    expect(pl.sales, 1200); // 1500 + 100 - 300 - 100 discount
+    expect(pl.cogs, 600); // (5 - 1) sold at 150
+    expect(pl.grossProfit, 600);
+    expect(pl.otherIncome, 40);
+    expect(pl.expenses, 500);
+    expect(pl.expensesByCategory.map((e) => e.$1), ['حقوق', 'اجاره']);
+    expect(pl.netProfit, 140);
+    expect(pl.uncategorized, 55);
+    expect(pl.unlinkedSales, 100);
+
+    // A cost sheet overrides the purchase average.
+    await r.saveCostSheet(prod, CostSheet(batchQty: 1, lines: [CostLine(name: 'x', value: 100)]));
+    expect((await r.profitLoss('2025-02-01', '2025-03-01')).cogs, 400);
+    // A period without sales is empty.
+    final empty = await r.profitLoss('2025-03-01', '2025-04-01');
+    expect([empty.sales, empty.cogs, empty.netProfit], [0, 0, 0]);
+  });
+
+  test('financial position: assets, liabilities and equity', () async {
+    final r = await newRepo();
+    await r.saveAccount(name: 'صندوق', kind: 'cash', opening: 1000);
+    await r.saveAccount(name: 'بانک', kind: 'bank', opening: -200); // overdraft
+    await r.saveProduct(name: 'کالا', buyPrice: 50, openingStock: 10);
+    await party(r, 'بدهکار', opening: 300);
+    await party(r, 'بستانکار', opening: -500);
+    await r.saveCheque(kind: 'received', number: '1', bank: '', amount: 700, dueDate: '2025-09-01');
+    await r.saveCheque(kind: 'issued', number: '2', bank: '', amount: 400, dueDate: '2025-09-01');
+    await r.saveCheque(kind: 'received', number: '3', bank: '', amount: 9999, dueDate: '2025-09-01');
+    await r.setChequeStatus((await r.cheques()).firstWhere((c) => c.number == '3'), 'bounced');
+
+    final f = await r.financialPosition();
+    expect(f.cash, 1000);
+    expect(f.overdrafts, 200);
+    expect(f.receivables, 300);
+    expect(f.inventory, 500);
+    expect(f.chequesReceived, 700); // the bounced one is not an asset
+    expect(f.assets, 1000 + 300 + 500 + 700);
+    expect(f.payables, 500);
+    expect(f.chequesIssued, 400);
+    expect(f.liabilities, 500 + 400 + 200);
+    expect(f.equity, 2500 - 1100);
+  });
+
+  test('ageing puts the newest invoices in the unpaid pile, oldest paid first', () async {
+    final r = await newRepo();
+    await r.saveAccount(name: 'صندوق', kind: 'cash', opening: 0);
+    final acc = (await r.accounts()).single.id;
+    final p = await party(r, 'مشتری');
+    Future<void> sale(int n, String date, int price) => r.saveInvoice(number: n, kind: 'sale', date: date, partyId: p, discount: 0, note: '', items: [InvoiceItem('x', 1, price)]);
+    await sale(1, '2025-03-22', 1000); // 100 days before 30 June
+    await sale(2, '2025-05-21', 500); // 40 days
+    await sale(3, '2025-06-20', 200); // 10 days
+    await r.saveTx(date: '2025-06-25', kind: 'receipt', amount: 1200, accountId: acc, partyId: p);
+    final rows = await r.ageing(asOf: DateTime(2025, 6, 30));
+    expect(rows.single.total, 500);
+    expect(rows.single.buckets, [200, 300, 0, 0]);
+
+    await party(r, 'با مانده اول دوره', opening: 400);
+    final again = await r.ageing(asOf: DateTime(2025, 6, 30));
+    expect(again.map((e) => e.name), ['مشتری', 'با مانده اول دوره']);
+    expect(again.last.buckets, [0, 0, 0, 400]); // older than any invoice on record
+  });
+
+  test('account ledger and product card carry running balances across periods', () async {
+    final r = await newRepo();
+    await r.saveAccount(name: 'صندوق', kind: 'cash', opening: 1000);
+    await r.saveAccount(name: 'بانک', kind: 'bank', opening: 0);
+    final accs = {for (final a in await r.accounts()) a.name: a.id};
+    await r.saveTx(date: '2025-01-10', kind: 'receipt', amount: 200, accountId: accs['صندوق']!);
+    await r.saveTx(date: '2025-02-10', kind: 'payment', amount: 50, accountId: accs['صندوق']!);
+    await r.saveTx(date: '2025-03-10', kind: 'transfer', amount: 100, accountId: accs['صندوق']!, toAccountId: accs['بانک']);
+    final all = await r.accountLedger(accs['صندوق']!);
+    expect(all.opening, 1000);
+    expect(all.lines.map((l) => l.balance), [1200, 1150, 1050]);
+    expect(all.closing, 1050);
+    final feb = await r.accountLedger(accs['صندوق']!, from: '2025-02-01', toExclusive: '2025-03-01');
+    expect(feb.opening, 1200);
+    expect(feb.lines.length, 1);
+    expect(feb.closing, 1150);
+    expect(feb.totalOut, 50);
+    final bank = await r.accountLedger(accs['بانک']!);
+    expect(bank.lines.single.inAmount, 100);
+    expect(bank.closing, 100);
+
+    final cust = await party(r, 'مشتری');
+    await r.saveProduct(name: 'کالا', salePrice: 10, openingStock: 10);
+    final prod = (await r.products()).single.id;
+    await r.saveInvoice(number: 1, kind: 'purchase', date: '2025-01-05', partyId: cust, discount: 0, note: '', items: [InvoiceItem('کالا', 5, 1, productId: prod)]);
+    await r.saveInvoice(number: 2, kind: 'sale', date: '2025-02-05', partyId: cust, discount: 0, note: '', items: [InvoiceItem('کالا', 3, 10, productId: prod)]);
+    await r.saveInvoice(number: 1, kind: 'proforma', date: '2025-02-06', partyId: cust, discount: 0, note: '', items: [InvoiceItem('کالا', 100, 10, productId: prod)]);
+    final card = await r.productCard(prod, from: '2025-02-01');
+    expect(card.opening, 15);
+    expect(card.lines.single.outAmount, 3);
+    expect(card.closing, 12);
+    expect((await r.productCard(prod)).lines.map((l) => l.balance), [15, 12]);
   });
 }

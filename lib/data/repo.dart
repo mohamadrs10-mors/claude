@@ -199,6 +199,106 @@ class StatementData {
   int get totalCredit => rows.fold(0, (a, r) => a + r.credit);
 }
 
+/// VAT collected (sales) and paid (purchases) in a period.
+class VatLine {
+  VatLine(this.date, this.number, this.kind, this.party, this.base, this.tax);
+  final String date, kind, party;
+  final int number;
+
+  /// Taxable amount and VAT, negative for returns.
+  final int base, tax;
+}
+
+class VatReport {
+  VatReport(this.lines);
+  final List<VatLine> lines;
+  int get outputTax => lines.where((l) => l.kind.startsWith('sale')).fold(0, (a, l) => a + l.tax);
+  int get inputTax => lines.where((l) => l.kind.startsWith('purchase')).fold(0, (a, l) => a + l.tax);
+  int get salesBase => lines.where((l) => l.kind.startsWith('sale')).fold(0, (a, l) => a + l.base);
+  int get purchasesBase => lines.where((l) => l.kind.startsWith('purchase')).fold(0, (a, l) => a + l.base);
+
+  /// Positive: VAT to pay; negative: VAT to claim back.
+  int get payable => outputTax - inputTax;
+}
+
+class ProfitLoss {
+  ProfitLoss({
+    required this.sales,
+    required this.cogs,
+    required this.otherIncome,
+    required this.expenses,
+    required this.otherIncomeByCategory,
+    required this.uncategorized,
+    required this.unlinkedSales,
+  });
+
+  /// Sales minus returns and discounts, without VAT.
+  final int sales;
+
+  /// Cost of the goods sold.
+  final int cogs;
+  final int otherIncome, expenses;
+  final List<(String, int)> otherIncomeByCategory;
+
+  /// Expenses by category, largest first.
+  List<(String, int)> expensesByCategory = [];
+
+  /// Payments without a person and without a category (not counted anywhere).
+  final int uncategorized;
+
+  /// Sales of lines that are not linked to a product (their cost is unknown).
+  final int unlinkedSales;
+
+  int get grossProfit => sales - cogs;
+  int get netProfit => grossProfit + otherIncome - expenses;
+}
+
+class FinancialPosition {
+  FinancialPosition({
+    required this.accounts,
+    required this.receivables,
+    required this.inventory,
+    required this.chequesReceived,
+    required this.payables,
+    required this.chequesIssued,
+  });
+
+  /// (name, balance) of every account (negative balances count as liabilities).
+  final List<(String, int)> accounts;
+  final int receivables, inventory, chequesReceived, payables, chequesIssued;
+
+  int get cash => accounts.where((a) => a.$2 > 0).fold(0, (s, a) => s + a.$2);
+  int get overdrafts => accounts.where((a) => a.$2 < 0).fold(0, (s, a) => s - a.$2);
+  int get assets => cash + receivables + inventory + chequesReceived;
+  int get liabilities => payables + chequesIssued + overdrafts;
+  int get equity => assets - liabilities;
+}
+
+/// What one party owes, by age of the oldest unpaid invoices (FIFO).
+class AgeingRow {
+  AgeingRow(this.partyId, this.name, this.buckets, this.total);
+  final String partyId, name;
+
+  /// 0-30, 31-60, 61-90, over 90 days.
+  final List<int> buckets;
+  final int total;
+}
+
+/// One line of an account ledger or a product card.
+class LedgerLine {
+  LedgerLine(this.date, this.description, this.inAmount, this.outAmount, this.balance);
+  final String date, description;
+  final num inAmount, outAmount, balance;
+}
+
+class Ledger {
+  Ledger(this.opening, this.lines, this.closing);
+  final num opening, closing;
+  final List<LedgerLine> lines;
+  num get totalIn => lines.fold(0, (a, l) => a + l.inAmount);
+  num get totalOut => lines.fold(0, (a, l) => a + l.outAmount);
+}
+
 class Dashboard {
   Dashboard({
     required this.totalBalance,
@@ -830,6 +930,210 @@ class Repo extends ChangeNotifier {
       rows.add(StatementRow(it.$1, it.$3, it.$4 > 0 ? it.$4 : 0, it.$4 < 0 ? -it.$4 : 0, running));
     }
     return StatementData(opening, rows, running);
+  }
+
+  // ---- financial reports ---------------------------------------------------
+
+  /// VAT of the invoices of a period (pro-formas never count).
+  Future<VatReport> vatReport(String from, String toExclusive) async {
+    final names = {for (final p in await parties()) p.id: p.name};
+    final lines = <VatLine>[];
+    for (final i in await invoices()) {
+      if (!i.info.ledger || i.date.compareTo(from) < 0 || i.date.compareTo(toExclusive) >= 0) continue;
+      final sign = i.kind.endsWith('return') ? -1 : 1;
+      lines.add(VatLine(i.date, i.number, i.kind, names[i.partyId] ?? '', sign * i.net, sign * i.tax));
+    }
+    lines.sort((a, b) => a.date.compareTo(b.date));
+    return VatReport(lines);
+  }
+
+  /// Unit cost used to value stock and goods sold: the cost sheet if there is
+  /// one, otherwise the weighted average of the opening stock (at the buy
+  /// price) and the purchases before [toExclusive].
+  Future<Map<String, double>> unitCosts(String toExclusive) async {
+    final rows = await store.db.rawQuery('''
+      SELECT p.id AS id, p.buy_price AS buy, p.opening_stock AS opening,
+        COALESCE((SELECT c.unit_cost FROM costings c WHERE c.product_id=p.id AND c.deleted=0),0) AS cost,
+        COALESCE(SUM(CASE WHEN i.kind='purchase' THEN it.qty WHEN i.kind='purchase_return' THEN -it.qty ELSE 0 END),0) AS qty,
+        COALESCE(SUM(CASE WHEN i.kind='purchase' THEN it.qty*it.unit_price WHEN i.kind='purchase_return' THEN -it.qty*it.unit_price ELSE 0 END),0) AS value
+      FROM products p
+      LEFT JOIN invoice_items it ON it.product_id=p.id AND it.deleted=0
+      LEFT JOIN invoices i ON i.id=it.invoice_id AND i.deleted=0 AND i.date<?
+      WHERE p.deleted=0 GROUP BY p.id''', [toExclusive]);
+    final out = <String, double>{};
+    for (final r in rows) {
+      final cost = (r['cost'] as num).toDouble();
+      if (cost > 0) {
+        out[r['id'] as String] = cost;
+        continue;
+      }
+      final buy = (r['buy'] as num).toDouble();
+      final qty = (r['opening'] as num).toDouble() + (r['qty'] as num).toDouble();
+      final value = (r['opening'] as num).toDouble() * buy + (r['value'] as num).toDouble();
+      out[r['id'] as String] = qty > 0 ? value / qty : buy;
+    }
+    return out;
+  }
+
+  /// Profit and loss of a period. Sales come from invoices; other income and
+  /// expenses come from categorised money movements that have no person and
+  /// no invoice (rent, salaries, bank interest...).
+  Future<ProfitLoss> profitLoss(String from, String toExclusive) async {
+    final costs = await unitCosts(toExclusive);
+    final lines = await store.db.rawQuery('''
+      SELECT i.kind AS kind, it.product_id AS pid, it.qty AS qty, ROUND(it.qty*it.unit_price) AS amount, i.id AS inv
+      FROM invoice_items it JOIN invoices i ON i.id=it.invoice_id
+      WHERE it.deleted=0 AND i.deleted=0 AND i.kind IN ('sale','sale_return') AND i.date>=? AND i.date<?''', [from, toExclusive]);
+    var sales = 0.0, cogs = 0.0, unlinked = 0.0;
+    for (final l in lines) {
+      final sign = l['kind'] == 'sale' ? 1 : -1;
+      final amount = (l['amount'] as num).toDouble() * sign;
+      sales += amount;
+      final pid = l['pid'] as String?;
+      if (pid == null || !costs.containsKey(pid)) {
+        unlinked += amount;
+      } else {
+        cogs += (l['qty'] as num).toDouble() * sign * costs[pid]!;
+      }
+    }
+    // Invoice discounts reduce sales (returns give them back).
+    for (final i in await invoices()) {
+      if (i.date.compareTo(from) < 0 || i.date.compareTo(toExclusive) >= 0) continue;
+      if (i.kind == 'sale') sales -= i.discount;
+      if (i.kind == 'sale_return') sales += i.discount;
+    }
+    final cat = await store.db.rawQuery('''
+      SELECT t.kind AS kind, COALESCE(c.name,'') AS name, c.kind AS ckind, SUM(t.amount) AS total
+      FROM transactions t LEFT JOIN categories c ON c.id=t.category_id AND c.deleted=0
+      WHERE t.deleted=0 AND t.kind IN ('receipt','payment') AND t.party_id IS NULL AND t.invoice_id IS NULL
+        AND t.date>=? AND t.date<? GROUP BY t.kind, c.id''', [from, toExclusive]);
+    final income = <(String, int)>[];
+    final expense = <(String, int)>[];
+    var uncategorized = 0;
+    for (final r in cat) {
+      final total = (r['total'] as num).round();
+      if (r['name'] == '') {
+        if (r['kind'] == 'payment') uncategorized += total;
+      } else if (r['kind'] == 'receipt' && r['ckind'] == 'income') {
+        income.add((r['name'] as String, total));
+      } else if (r['kind'] == 'payment' && r['ckind'] == 'expense') {
+        expense.add((r['name'] as String, total));
+      }
+    }
+    expense.sort((a, b) => b.$2.compareTo(a.$2));
+    income.sort((a, b) => b.$2.compareTo(a.$2));
+    return ProfitLoss(
+      sales: sales.round(),
+      cogs: cogs.round(),
+      otherIncome: income.fold(0, (a, e) => a + e.$2),
+      expenses: expense.fold(0, (a, e) => a + e.$2),
+      otherIncomeByCategory: income,
+      uncategorized: uncategorized,
+      unlinkedSales: unlinked.round(),
+    )..expensesByCategory = expense;
+  }
+
+  /// What the business owns and owes right now.
+  Future<FinancialPosition> financialPosition() async {
+    final accs = await accounts();
+    final parts = await parties();
+    final costs = await unitCosts('9999-12-31');
+    var inventory = 0.0;
+    for (final p in await products()) {
+      if (p.stock > 0) inventory += p.stock * (costs[p.id] ?? p.buyPrice);
+    }
+    final cheques = await this.cheques(status: 'pending');
+    return FinancialPosition(
+      accounts: [for (final a in accs) (a.name, a.balance)],
+      receivables: parts.where((p) => p.balance > 0).fold(0, (a, p) => a + p.balance),
+      inventory: inventory.round(),
+      chequesReceived: cheques.where((c) => c.kind == 'received').fold(0, (a, c) => a + c.amount),
+      payables: parts.where((p) => p.balance < 0).fold(0, (a, p) => a - p.balance),
+      chequesIssued: cheques.where((c) => c.kind == 'issued').fold(0, (a, c) => a + c.amount),
+    );
+  }
+
+  /// Who owes us, by how long ago the unpaid sales were made. Payments are
+  /// applied to the oldest invoices first, so what remains is the newest.
+  Future<List<AgeingRow>> ageing({DateTime? asOf}) async {
+    final now = asOf ?? DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final byParty = <String, List<Invoice>>{};
+    for (final i in await invoices()) {
+      if (i.info.ledger && i.info.partyOwesUs) (byParty[i.partyId] ??= []).add(i);
+    }
+    final rows = <AgeingRow>[];
+    for (final p in await parties()) {
+      if (p.balance <= 0) continue;
+      var left = p.balance;
+      final buckets = [0, 0, 0, 0];
+      final list = (byParty[p.id] ?? [])..sort((a, b) => b.date.compareTo(a.date)); // newest first
+      for (final i in list) {
+        if (left <= 0) break;
+        final part = i.total < left ? i.total : left;
+        left -= part;
+        final age = today.difference(DateTime.parse(i.date)).inDays;
+        buckets[age <= 30 ? 0 : (age <= 60 ? 1 : (age <= 90 ? 2 : 3))] += part;
+      }
+      buckets[3] += left; // opening balance and anything older than the invoices on record
+      rows.add(AgeingRow(p.id, p.name, buckets, p.balance));
+    }
+    rows.sort((a, b) => b.total.compareTo(a.total));
+    return rows;
+  }
+
+  /// Movements of one account in a period with a running balance.
+  Future<Ledger> accountLedger(String accountId, {String? from, String? toExclusive}) async {
+    final acc = (await accounts()).firstWhere((a) => a.id == accountId);
+    final names = {for (final a in await accounts()) a.id: a.name, for (final p in await parties()) p.id: p.name};
+    final txs = (await transactions(accountId: accountId)).reversed.toList(); // oldest first
+    var running = acc.opening;
+    num opening = running;
+    final lines = <LedgerLine>[];
+    for (final t in txs) {
+      final inAmt = t.kind == 'receipt' || (t.kind == 'transfer' && t.toAccountId == accountId) ? t.amount : 0;
+      final outAmt = t.kind == 'payment' || (t.kind == 'transfer' && t.accountId == accountId) ? t.amount : 0;
+      running += inAmt - outAmt;
+      if (from != null && t.date.compareTo(from) < 0) {
+        opening = running;
+        continue;
+      }
+      if (toExclusive != null && t.date.compareTo(toExclusive) >= 0) continue;
+      final who = t.kind == 'transfer'
+          ? (t.accountId == accountId ? 'انتقال به ${names[t.toAccountId] ?? ''}' : 'انتقال از ${names[t.accountId] ?? ''}')
+          : [txKindLabel(t.kind), if (t.partyId != null) names[t.partyId] ?? ''].join(' • ');
+      lines.add(LedgerLine(t.date, [who, if (t.description.isNotEmpty) t.description].join(' - '), inAmt, outAmt, running));
+    }
+    final closing = lines.isEmpty ? opening : lines.last.balance;
+    return Ledger(opening, lines, closing);
+  }
+
+  /// Stock movements of one product (kardex): purchases and returns in, sales out.
+  Future<Ledger> productCard(String productId, {String? from, String? toExclusive}) async {
+    final prod = (await products()).firstWhere((p) => p.id == productId);
+    final names = {for (final p in await parties()) p.id: p.name};
+    final rows = await store.db.rawQuery('''
+      SELECT i.date AS date, i.number AS number, i.kind AS kind, i.party_id AS party, it.qty AS qty
+      FROM invoice_items it JOIN invoices i ON i.id=it.invoice_id
+      WHERE it.deleted=0 AND i.deleted=0 AND i.kind<>'proforma' AND it.product_id=?
+      ORDER BY i.date, i.number''', [productId]);
+    num running = prod.openingStock;
+    num opening = running;
+    final lines = <LedgerLine>[];
+    for (final r in rows) {
+      final kind = r['kind'] as String;
+      final qty = (r['qty'] as num).toDouble();
+      final stockIn = invoiceKind(kind).stockIn;
+      running += stockIn ? qty : -qty;
+      final date = r['date'] as String;
+      if (from != null && date.compareTo(from) < 0) {
+        opening = running;
+        continue;
+      }
+      if (toExclusive != null && date.compareTo(toExclusive) >= 0) continue;
+      lines.add(LedgerLine(date, '${invoiceKind(kind).label} ${faDigits('${r['number']}')} • ${names[r['party']] ?? ''}', stockIn ? qty : 0, stockIn ? 0 : qty, running));
+    }
+    return Ledger(opening, lines, lines.isEmpty ? opening : lines.last.balance);
   }
 
   Future<Dashboard> dashboard() async {

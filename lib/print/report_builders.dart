@@ -207,3 +207,125 @@ ReportDoc accountsDoc(List<Account> accounts) => ReportDoc(
         ),
       ],
     );
+
+// ---- financial reports ------------------------------------------------------
+
+ReportDoc profitLossDoc(ProfitLoss p, String period) => ReportDoc(
+      title: 'گزارش سود و زیان',
+      subtitle: period,
+      summary: [('سود ناخالص', moneyC(p.grossProfit)), ('سود (زیان) خالص', moneyC(p.netProfit))],
+      tables: [
+        ReportTable(
+          headers: const ['شرح', 'مبلغ'],
+          cols: const [Col.text, Col.number],
+          flex: const [4, 2],
+          rows: [
+            ['فروش خالص (پس از برگشتی و تخفیف، بدون مالیات)', money(p.sales)],
+            ['بهای تمام‌شدهٔ کالای فروش‌رفته', money(-p.cogs)],
+            ['سود ناخالص', money(p.grossProfit)],
+            for (final (n, v) in p.otherIncomeByCategory) ['درآمد: $n', money(v)],
+            for (final (n, v) in p.expensesByCategory) ['هزینه: $n', money(-v)],
+          ],
+          totals: ['سود (زیان) خالص', money(p.netProfit)],
+        ),
+      ],
+      footnote: 'بهای کالا با قیمت تمام‌شدهٔ برگهٔ هزینه یا میانگین موزون خرید حساب شده است. '
+          '${p.unlinkedSales != 0 ? 'فروش اقلامی که به کالا وصل نبوده (${money(p.unlinkedSales)}) بدون بهای تمام‌شده آمده است. ' : ''}'
+          '${p.uncategorized != 0 ? 'پرداخت‌های بدون شخص و بدون دسته‌بندی (${money(p.uncategorized)}) در هیچ‌کجا نیامده است.' : ''}',
+    );
+
+ReportDoc financialPositionDoc(FinancialPosition f) => ReportDoc(
+      title: 'وضعیت مالی (ترازنامهٔ ساده)',
+      subtitle: 'تا امروز',
+      summary: [('جمع دارایی‌ها', moneyC(f.assets)), ('جمع بدهی‌ها', moneyC(f.liabilities)), ('حقوق صاحبان سرمایه', moneyC(f.equity))],
+      tables: [
+        ReportTable(
+          heading: 'دارایی‌ها',
+          headers: const ['شرح', 'مبلغ'],
+          cols: const [Col.text, Col.number],
+          flex: const [4, 2],
+          rows: [
+            for (final (n, v) in f.accounts.where((a) => a.$2 > 0)) ['موجودی $n', money(v)],
+            ['طلب از اشخاص', money(f.receivables)],
+            ['موجودی کالا', money(f.inventory)],
+            ['چک‌های دریافتی در انتظار', money(f.chequesReceived)],
+          ],
+          totals: ['جمع دارایی‌ها', money(f.assets)],
+        ),
+        ReportTable(
+          heading: 'بدهی‌ها',
+          headers: const ['شرح', 'مبلغ'],
+          cols: const [Col.text, Col.number],
+          flex: const [4, 2],
+          rows: [
+            ['بدهی به اشخاص', money(f.payables)],
+            ['چک‌های پرداختی در انتظار', money(f.chequesIssued)],
+            for (final (n, v) in f.accounts.where((a) => a.$2 < 0)) ['برداشت بیش از موجودی $n', money(-v)],
+          ],
+          totals: ['جمع بدهی‌ها', money(f.liabilities)],
+        ),
+      ],
+      footnote: 'موجودی کالا با قیمت تمام‌شده یا میانگین خرید ارزش‌گذاری شده است. دارایی ثابت و استهلاک در این گزارش نیست.',
+    );
+
+ReportDoc vatDoc(VatReport v, String period) => ReportDoc(
+      title: 'گزارش مالیات بر ارزش افزوده',
+      subtitle: period,
+      summary: [
+        ('مالیات فروش (دریافتی)', moneyC(v.outputTax)),
+        ('مالیات خرید (پرداختی)', moneyC(v.inputTax)),
+        (v.payable >= 0 ? 'مالیات قابل پرداخت' : 'مالیات قابل استرداد', moneyC(v.payable.abs())),
+      ],
+      tables: [
+        ReportTable(
+          headers: const ['تاریخ', 'سند', 'شخص', 'مبنای مالیات', 'مالیات'],
+          cols: const [Col.center, Col.text, Col.text, Col.number, Col.number],
+          flex: const [1.3, 2.2, 2.4, 1.8, 1.4],
+          rows: [
+            for (final l in v.lines) [jalaliText(l.date), '${invoiceKind(l.kind).label} ${faDigits('${l.number}')}', l.party, money(l.base), money(l.tax)],
+          ],
+          totals: ['', '', 'خالص فروش − خرید', money(v.salesBase - v.purchasesBase), money(v.payable)],
+        ),
+      ],
+      footnote: 'برگشتی‌ها منفی آمده‌اند. این گزارش کمکی است و جایگزین اظهارنامهٔ رسمی نیست.',
+    );
+
+ReportDoc ageingDoc(List<AgeingRow> rows) {
+  List<int> sum(int i) => [rows.fold(0, (a, r) => a + r.buckets[i])];
+  return ReportDoc(
+    title: 'سن مطالبات',
+    subtitle: 'تا امروز',
+    summary: [('جمع مطالبات', moneyC(rows.fold(0, (a, r) => a + r.total)))],
+    tables: [
+      ReportTable(
+        headers: const ['شخص', '۰ تا ۳۰ روز', '۳۱ تا ۶۰', '۶۱ تا ۹۰', 'بیش از ۹۰', 'جمع'],
+        cols: const [Col.text, Col.number, Col.number, Col.number, Col.number, Col.number],
+        flex: const [2.6, 1.6, 1.4, 1.4, 1.5, 1.8],
+        rows: [for (final r in rows) [r.name, for (final b in r.buckets) b == 0 ? '' : money(b), money(r.total)]],
+        totals: ['جمع', for (var i = 0; i < 4; i++) money(sum(i).first), money(rows.fold(0, (a, r) => a + r.total))],
+      ),
+    ],
+    footnote: 'پرداخت‌ها به قدیمی‌ترین فاکتورها اختصاص داده شده است؛ مانده اول دوره در ستون «بیش از ۹۰» می‌آید.',
+  );
+}
+
+ReportDoc ledgerDoc({required String title, required String subtitle, required Ledger ledger, String unit = ''}) {
+  String q(num v) => unit.isEmpty ? money(v.round()) : '${numText(v)} $unit';
+  return ReportDoc(
+    title: title,
+    subtitle: subtitle,
+    summary: [('مانده ابتدا', q(ledger.opening)), ('جمع ورودی', q(ledger.totalIn)), ('جمع خروجی', q(ledger.totalOut)), ('مانده پایان', q(ledger.closing))],
+    tables: [
+      ReportTable(
+        headers: const ['تاریخ', 'شرح', 'ورودی', 'خروجی', 'مانده'],
+        cols: const [Col.center, Col.text, Col.number, Col.number, Col.number],
+        flex: const [1.3, 3.6, 1.5, 1.5, 1.7],
+        rows: [
+          for (final l in ledger.lines)
+            [jalaliText(l.date), l.description, l.inAmount == 0 ? '' : (unit.isEmpty ? money(l.inAmount.round()) : numText(l.inAmount)), l.outAmount == 0 ? '' : (unit.isEmpty ? money(l.outAmount.round()) : numText(l.outAmount)), unit.isEmpty ? money(l.balance.round()) : numText(l.balance)],
+        ],
+        totals: ['', 'جمع', unit.isEmpty ? money(ledger.totalIn.round()) : numText(ledger.totalIn), unit.isEmpty ? money(ledger.totalOut.round()) : numText(ledger.totalOut), unit.isEmpty ? money(ledger.closing.round()) : numText(ledger.closing)],
+      ),
+    ],
+  );
+}

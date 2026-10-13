@@ -6,6 +6,7 @@ import '../print/report_builders.dart';
 import '../util/format.dart';
 import 'common.dart';
 import 'product_buyers_tab.dart';
+import 'finance_reports.dart';
 import 'print_dialog.dart';
 import 'products_page.dart';
 
@@ -19,7 +20,7 @@ class ReportsPage extends StatefulWidget {
 class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStateMixin {
   final now = Jalali.now();
   late int year = now.year, month = now.month;
-  late final TabController tabs = TabController(length: 4, vsync: this);
+  late final TabController tabs = TabController(length: 10, vsync: this);
 
   @override
   void dispose() {
@@ -40,15 +41,27 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
       child: Column(children: [
         TabBar(controller: tabs, isScrollable: true, tabAlignment: TabAlignment.start, tabs: const [
           Tab(text: 'درآمد و هزینه'),
+          Tab(text: 'سود و زیان'),
+          Tab(text: 'وضعیت مالی'),
+          Tab(text: 'مالیات'),
           Tab(text: 'فروش کالا'),
           Tab(text: 'فروش کالا به تفکیک شخص'),
+          Tab(text: 'سن مطالبات'),
+          Tab(text: 'گردش حساب'),
+          Tab(text: 'کاردکس کالا'),
           Tab(text: 'بدهکاران و بستانکاران'),
         ]),
         Expanded(
           child: TabBarView(controller: tabs, children: [
             _monthPicker(_cashReport(from, to)),
+            ProfitLossTab(repo: widget.repo),
+            FinancialPositionTab(repo: widget.repo),
+            VatTab(repo: widget.repo),
             _monthPicker(_productReport(from, to)),
             ProductBuyersTab(repo: widget.repo),
+            AgeingTab(repo: widget.repo),
+            LedgerTab(repo: widget.repo, product: false),
+            LedgerTab(repo: widget.repo, product: true),
             _partyReport(),
           ]),
         ),
