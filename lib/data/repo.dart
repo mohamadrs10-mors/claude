@@ -296,6 +296,47 @@ class StatementData {
   int get totalCredit => rows.fold(0, (a, r) => a + r.credit);
 }
 
+/// One line of a party's ledger (معین): an invoice, a payment or a receipt.
+class PartyLedgerRow {
+  PartyLedgerRow({
+    required this.date,
+    required this.type,
+    required this.description,
+    required this.balance,
+    this.number = '',
+    this.debit = 0,
+    this.credit = 0,
+    this.invoiceId,
+  });
+  final String date, type, number, description;
+
+  /// Increases what the party owes us (sale invoice, a payment we made).
+  final int debit;
+
+  /// Decreases it (money received, a purchase invoice, advance used).
+  final int credit;
+
+  /// Running balance after this line. Positive: the party owes us.
+  final int balance;
+
+  /// Set on invoice lines so the screen can open the invoice.
+  final String? invoiceId;
+}
+
+/// Everything between us and one party in a period: invoices and money, with
+/// the balance carried in from before and the cheques still waiting.
+class PartyLedger {
+  PartyLedger(this.opening, this.rows, this.closing, this.pendingCheques);
+  final int opening, closing;
+  final List<PartyLedgerRow> rows;
+
+  /// Cheques of this party that are not cleared yet (they are not in the balance).
+  final List<Cheque> pendingCheques;
+  int get totalDebit => rows.fold(0, (a, r) => a + r.debit);
+  int get totalCredit => rows.fold(0, (a, r) => a + r.credit);
+  int get invoiceCount => rows.where((r) => r.invoiceId != null && r.credit + r.debit > 0 && r.type != 'کسر از پیش‌دریافت').length;
+}
+
 /// VAT collected (sales) and paid (purchases) in a period.
 class VatLine {
   VatLine(this.date, this.number, this.kind, this.party, this.base, this.tax);
@@ -1372,6 +1413,100 @@ class Repo extends ChangeNotifier {
       rows.add(StatementRow(it.$1, it.$3, it.$4 > 0 ? it.$4 : 0, it.$4 < 0 ? -it.$4 : 0, running));
     }
     return StatementData(opening, rows, running);
+  }
+
+  /// The ledger (معین) of one party: every invoice and every payment/receipt
+  /// between us, oldest first, with a running balance. Same numbers as the
+  /// party statement, with the kind and number of each document.
+  Future<PartyLedger> partyLedger(String partyId, {String? from, String? toExclusive}) async {
+    final accNames = {for (final a in await accounts()) a.id: a.name};
+    final invNumbers = <String, int>{};
+    // date, order within the day, row without balance, signed amount
+    final items = <(String, int, PartyLedgerRow, int)>[];
+    for (final i in await invoices(partyId: partyId)) {
+      invNumbers[i.id] = i.number;
+      if (!i.info.ledger) continue;
+      final lines = await invoiceItems(i.id);
+      final names = lines.take(3).map((l) => '${l.title} × ${faDigits(numText(l.qty))}').join('، ');
+      final more = lines.length > 3 ? ' و ${faDigits('${lines.length - 3}')} قلم دیگر' : '';
+      final signed = i.info.partyOwesUs ? i.total : -i.total;
+      items.add((
+        i.date,
+        0,
+        PartyLedgerRow(
+          date: i.date, type: i.info.label, number: faDigits('${i.number}'), invoiceId: i.id,
+          description: [names + more, if (i.note.isNotEmpty) i.note].where((t) => t.isNotEmpty).join(' • '),
+          debit: signed > 0 ? signed : 0, credit: signed < 0 ? -signed : 0, balance: 0,
+        ),
+        signed,
+      ));
+      if (i.prepaid > 0) {
+        items.add((
+          i.date,
+          1,
+          PartyLedgerRow(
+            date: i.date, type: 'کسر از پیش‌دریافت', number: faDigits('${i.number}'), invoiceId: i.id,
+            description: 'پیش‌دریافت سفارش برای ${i.info.label} ${faDigits('${i.number}')}', credit: i.prepaid, balance: 0,
+          ),
+          -i.prepaid,
+        ));
+      }
+    }
+    for (final t in await transactions(partyId: partyId)) {
+      if (t.kind != 'receipt' && t.kind != 'payment') continue;
+      final signed = t.kind == 'payment' ? t.amount : -t.amount;
+      final inv = t.invoiceId == null ? null : invNumbers[t.invoiceId];
+      items.add((
+        t.date,
+        2,
+        PartyLedgerRow(
+          date: t.date, type: t.kind == 'receipt' ? 'دریافت' : 'پرداخت', number: inv == null ? '' : faDigits('$inv'),
+          description: [
+            if (accNames[t.accountId] != null) accNames[t.accountId]!,
+            if (inv != null) 'بابت فاکتور ${faDigits('$inv')}',
+            if (t.description.isNotEmpty) t.description,
+          ].join(' • '),
+          debit: signed > 0 ? signed : 0, credit: signed < 0 ? -signed : 0, balance: 0,
+        ),
+        signed,
+      ));
+    }
+    for (final o in await orders(partyId: partyId)) {
+      if (o.released > 0 && o.closedDate.isNotEmpty) {
+        items.add((
+          o.closedDate,
+          3,
+          PartyLedgerRow(
+            date: o.closedDate, type: 'اعتبار پیش‌دریافت', number: faDigits('${o.number}'),
+            description: 'پیش‌دریافت مصرف‌نشدهٔ سفارش ${faDigits('${o.number}')}', credit: o.released, balance: 0,
+          ),
+          -o.released,
+        ));
+      }
+    }
+    items.sort((a, b) {
+      final c = a.$1.compareTo(b.$1);
+      return c != 0 ? c : a.$2.compareTo(b.$2);
+    });
+    final party = (await parties()).where((p) => p.id == partyId).firstOrNull;
+    var running = party?.opening ?? 0;
+    var opening = running;
+    final rows = <PartyLedgerRow>[];
+    for (final it in items) {
+      if (toExclusive != null && it.$1.compareTo(toExclusive) >= 0) continue;
+      running += it.$4;
+      if (from != null && it.$1.compareTo(from) < 0) {
+        opening = running;
+        continue;
+      }
+      final r = it.$3;
+      rows.add(PartyLedgerRow(
+        date: r.date, type: r.type, number: r.number, description: r.description,
+        debit: r.debit, credit: r.credit, balance: running, invoiceId: r.invoiceId,
+      ));
+    }
+    final pending = (await cheques(status: 'pending')).where((c) => c.partyId == partyId).toList();
+    return PartyLedger(opening, rows, running, pending);
   }
 
   // ---- financial reports ---------------------------------------------------

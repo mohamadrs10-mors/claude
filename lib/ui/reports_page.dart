@@ -7,6 +7,7 @@ import '../util/format.dart';
 import 'common.dart';
 import 'product_buyers_tab.dart';
 import 'finance_reports.dart';
+import 'party_ledger_tab.dart';
 import 'print_dialog.dart';
 import 'products_page.dart';
 
@@ -20,7 +21,7 @@ class ReportsPage extends StatefulWidget {
 class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStateMixin {
   final now = Jalali.now();
   late int year = now.year, month = now.month;
-  late final TabController tabs = TabController(length: 10, vsync: this);
+  late final TabController tabs = TabController(length: 11, vsync: this);
 
   @override
   void dispose() {
@@ -50,6 +51,7 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
           Tab(text: 'گردش حساب'),
           Tab(text: 'کاردکس کالا'),
           Tab(text: 'بدهکاران و بستانکاران'),
+          Tab(text: 'معین اشخاص'),
         ]),
         Expanded(
           child: TabBarView(controller: tabs, children: [
@@ -63,6 +65,7 @@ class _ReportsPageState extends State<ReportsPage> with SingleTickerProviderStat
             LedgerTab(repo: widget.repo, product: false),
             LedgerTab(repo: widget.repo, product: true),
             _partyReport(),
+            PartyLedgerTab(repo: widget.repo),
           ]),
         ),
       ]),

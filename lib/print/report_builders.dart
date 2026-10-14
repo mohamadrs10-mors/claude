@@ -330,3 +330,45 @@ ReportDoc ledgerDoc({required String title, required String subtitle, required L
     ],
   );
 }
+
+
+/// Ledger (معین) of one party: all invoices and payments between us.
+ReportDoc partyLedgerDoc(Party party, PartyLedger l, String period) {
+  String bal(int v) => v == 0 ? '۰' : (v > 0 ? '${money(v)} بدهکار' : '${money(-v)} بستانکار');
+  return ReportDoc(
+    title: 'معین ${party.name}',
+    subtitle: 'بازه: $period${party.phone.isEmpty ? '' : ' • تلفن: ${faDigits(party.phone)}'}',
+    summary: [
+      ('مانده از قبل', bal(l.opening)),
+      ('جمع بدهکار', moneyC(l.totalDebit)),
+      ('جمع بستانکار', moneyC(l.totalCredit)),
+      ('مانده پایان', bal(l.closing)),
+    ],
+    tables: [
+      ReportTable(
+        heading: 'فاکتورها و تراکنش‌ها',
+        headers: const ['تاریخ', 'سند', 'شماره', 'شرح', 'بدهکار', 'بستانکار', 'مانده'],
+        cols: const [Col.center, Col.text, Col.center, Col.text, Col.number, Col.number, Col.number],
+        flex: const [1.3, 1.6, 0.8, 3.2, 1.5, 1.5, 1.8],
+        rows: [
+          if (l.opening != 0) ['', 'مانده از قبل', '', '', '', '', money(l.opening)],
+          for (final r in l.rows)
+            [jalaliText(r.date), r.type, r.number, r.description, r.debit > 0 ? money(r.debit) : '', r.credit > 0 ? money(r.credit) : '', money(r.balance)],
+        ],
+        totals: ['', 'جمع', '', '', money(l.totalDebit), money(l.totalCredit), money(l.closing)],
+      ),
+      if (l.pendingCheques.isNotEmpty)
+        ReportTable(
+          heading: 'چک‌های در انتظار (هنوز در مانده نیامده‌اند)',
+          headers: const ['سررسید', 'نوع', 'شمارهٔ چک', 'بانک', 'مبلغ'],
+          cols: const [Col.center, Col.text, Col.center, Col.text, Col.number],
+          flex: const [1.4, 1.4, 1.4, 2, 1.8],
+          rows: [
+            for (final c in l.pendingCheques)
+              [jalaliText(c.dueDate), c.kind == 'received' ? 'دریافتی' : 'پرداختی', faDigits(c.number), c.bank, money(c.amount)],
+          ],
+        ),
+    ],
+    footnote: 'بدهکار یعنی طلب ما از شخص؛ بستانکار یعنی بدهی ما به او. مبالغ بر حسب $currencyLabel.',
+  );
+}
