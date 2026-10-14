@@ -22,9 +22,10 @@ const syncTables = [
   'deliveries',
   'delivery_items',
   'orders',
+  'order_items',
 ];
 
-const _schemaVersion = 6;
+const _schemaVersion = 7;
 
 const _v2Tables = [
   '''CREATE TABLE products (
@@ -94,6 +95,18 @@ const _v6Tables = [
   'CREATE INDEX idx_invoices_order ON invoices(order_id)',
 ];
 
+/// An order can hold several products. Each row is one product with the
+/// quantity and unit price agreed in the order.
+const _v7Tables = [
+  '''CREATE TABLE order_items (
+    id TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
+    device_id TEXT NOT NULL, seq INTEGER NOT NULL,
+    order_id TEXT NOT NULL, product_id TEXT, title TEXT NOT NULL, qty REAL NOT NULL DEFAULT 0,
+    unit_price INTEGER NOT NULL DEFAULT 0, position INTEGER NOT NULL DEFAULT 0)''',
+  'CREATE INDEX idx_order_items_seq ON order_items(seq)',
+  'CREATE INDEX idx_order_items_order ON order_items(order_id)',
+];
+
 /// Upgrade 5 -> 6: orders and the advance applied to each invoice.
 const _migrate5to6 = [
   'ALTER TABLE invoices ADD COLUMN order_id TEXT',
@@ -160,6 +173,7 @@ final _schema = [
   ..._v3Tables,
   ..._v5Tables,
   ..._v6Tables,
+  ..._v7Tables,
   '''CREATE TABLE transactions (
     id TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
     device_id TEXT NOT NULL, seq INTEGER NOT NULL,
@@ -170,8 +184,33 @@ final _schema = [
   'CREATE INDEX idx_tx_party ON transactions(party_id)',
   'CREATE INDEX idx_items_inv ON invoice_items(invoice_id)',
   for (final t in syncTables)
-    if (!const {'deliveries', 'delivery_items', 'orders'}.contains(t)) 'CREATE INDEX idx_${t}_seq ON $t(seq)',
+    if (!const {'deliveries', 'delivery_items', 'orders', 'order_items'}.contains(t)) 'CREATE INDEX idx_${t}_seq ON $t(seq)',
 ];
+
+/// Orders made before orders could hold several products have one product in
+/// the order row itself; give each one a single item. The item id is derived
+/// from the order id, so two devices that both upgrade create the same row
+/// instead of duplicates when they sync.
+Future<void> _orderItemsFromOrders(Database db) async {
+  var seq = int.parse((await db.query('meta', where: "key='seq'")).first['value'] as String);
+  for (final o in await db.query('orders')) {
+    seq++;
+    await db.insert('order_items', {
+      'id': '${o['id']}:0',
+      'updated_at': o['updated_at'],
+      'deleted': o['deleted'],
+      'device_id': o['device_id'],
+      'seq': seq,
+      'order_id': o['id'],
+      'product_id': o['product_id'],
+      'title': o['title'],
+      'qty': o['qty'],
+      'unit_price': o['unit_price'],
+      'position': 0,
+    });
+  }
+  await db.update('meta', {'value': '$seq'}, where: "key='seq'");
+}
 
 /// Thin wrapper around the SQLite database that stamps every write with the
 /// metadata needed for sync (updated_at, device_id and a local change counter).
@@ -220,6 +259,12 @@ class AppDb {
             for (final q in _migrate5to6) {
               await db.execute(q);
             }
+          }
+          if (from < 7) {
+            for (final q in _v7Tables) {
+              await db.execute(q);
+            }
+            await _orderItemsFromOrders(db);
           }
         },
         onCreate: (db, _) async {

@@ -428,18 +428,26 @@ class _InvoiceEditPageState extends State<InvoiceEditPage> {
   int _prepaid(int total) {
     final o = order;
     if (o == null || kind != 'sale') return 0;
-    return Repo.prepaidFor(total, o.percent, o.available + (o.id == originalOrderId ? ownPrepaid : 0));
+    final items = [for (final l in lines) InvoiceItem(l.title.text.trim(), l.q, parseAmount(l.price.text), productId: l.productId)];
+    // Only the lines that are products of the order count towards the advance.
+    return Repo.prepaidFor(total, o.percent, o.available + (o.id == originalOrderId ? ownPrepaid : 0), share: Repo.orderShare(o.items, items));
   }
 
   void _pickOrder(String? id) {
     setState(() => orderId = id);
     final o = order;
     if (o == null || lines.length != 1 || lines.first.title.text.trim().isNotEmpty) return;
-    final l = lines.first;
-    l.productId = o.productId;
-    l.title.text = o.title;
-    if (o.remainingQty > 0) l.qty.text = qtyText(o.remainingQty);
-    l.price.text = money(o.unitPrice);
+    // An empty invoice is filled with what is still to be delivered of the order.
+    final todo = o.items.where((i) => i.remainingQty > 0).toList();
+    if (todo.isEmpty) return;
+    for (var i = 0; i < todo.length; i++) {
+      final l = i == 0 ? lines.first : _Line();
+      l.productId = todo[i].productId;
+      l.title.text = todo[i].title;
+      l.qty.text = qtyText(todo[i].remainingQty);
+      l.price.text = money(todo[i].unitPrice);
+      if (i > 0) lines.add(l);
+    }
     setState(() {});
   }
 
@@ -463,7 +471,7 @@ class _InvoiceEditPageState extends State<InvoiceEditPage> {
     if (price > 0) l.price.text = money(price);
     // With several open orders, the one for this product is used.
     if (kind == 'sale' && orderId == null && widget.invoiceId == null) {
-      final match = orders.where((o) => o.open && o.available > 0 && o.productId == p.id).toList();
+      final match = orders.where((o) => o.open && o.available > 0 && o.items.any((i) => i.productId == p.id)).toList();
       if (match.length == 1) orderId = match.single.id;
     }
     setState(() {});

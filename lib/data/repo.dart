@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:shamsi_date/shamsi_date.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart' show DatabaseExecutor;
 
 import '../util/format.dart';
 import '../print/print_settings.dart';
@@ -113,27 +114,50 @@ class DeliveryItem {
   final String? productId;
 }
 
-/// An order for one product with an advance payment (سفارش و پیش‌دریافت). The
-/// advance is cash received without crediting the customer; each sale invoice
-/// made for the order counts [percent] of its total as paid from the advance.
+/// One product of an order with the quantity and unit price agreed.
+class OrderItem {
+  OrderItem(this.title, this.qty, this.unitPrice, {this.productId, this.invoicedQty = 0});
+  final String title;
+  final double qty, invoicedQty;
+  final int unitPrice;
+  final String? productId;
+  int get total => (qty * unitPrice).round();
+  double get remainingQty => (qty - invoicedQty) < 0 ? 0 : qty - invoicedQty;
+
+  /// Whether an invoice line is for this product (by product, or by name for
+  /// products that were typed in by hand).
+  bool matches(InvoiceItem it) => productId != null ? it.productId == productId : it.title.trim() == title.trim();
+}
+
+/// An order for one or several products with an advance payment (سفارش و
+/// پیش‌دریافت). The advance is cash received without crediting the customer;
+/// each sale invoice made for the order counts [percent] of the part of its
+/// total that is for products of the order as paid from the advance.
 class Order {
   Order({
-    required this.id, required this.number, required this.date, required this.partyId, this.productId,
-    required this.title, required this.qty, required this.unitPrice, required this.percent,
+    required this.id, required this.number, required this.date, required this.partyId,
+    required this.title, required this.items, required this.percent,
     required this.advance, this.accountId, this.txId, required this.status, required this.released,
-    required this.closedDate, required this.note, required this.applied, required this.invoicedQty,
+    required this.closedDate, required this.note, required this.applied,
   });
   final String id, date, partyId, title, status, closedDate, note;
-  final String? productId, accountId, txId;
-  final int number, unitPrice, advance, released, applied;
-  final double qty, percent, invoicedQty;
+  final String? accountId, txId;
+  final int number, advance, released, applied;
+  final double percent;
+  final List<OrderItem> items;
 
   bool get open => status == 'open';
-  int get total => (qty * unitPrice).round();
+  int get total => items.fold(0, (a, i) => a + i.total);
+
+  /// Share of the order's value already invoiced, 0..1.
+  double get progress {
+    if (total <= 0) return 0;
+    final done = items.fold<double>(0, (a, i) => a + (i.invoicedQty > i.qty ? i.qty : i.invoicedQty) * i.unitPrice);
+    return (done / total).clamp(0, 1).toDouble();
+  }
 
   /// Advance not yet counted on an invoice or released to the customer.
   int get available => (advance - applied - released).clamp(0, advance);
-  double get remainingQty => qty - invoicedQty;
 }
 
 /// The four kinds of invoice and how each one affects the party balance and
@@ -710,7 +734,8 @@ class Repo extends ChangeNotifier {
                   'SELECT COALESCE(SUM(prepaid),0) AS n FROM invoices WHERE order_id=? AND deleted=0 AND id<>?', [linked, invId]))
               .first['n'] as num;
           final left = (o['advance_amount'] as int) - (o['released'] as int) - others.round();
-          prepaid = prepaidFor(total, (o['advance_percent'] as num).toDouble(), left);
+          final oi = await _orderItemsOf(tx, linked);
+          prepaid = prepaidFor(total, (o['advance_percent'] as num).toDouble(), left, share: orderShare(oi, items));
         }
       }
       await store.save('invoices', {
@@ -734,23 +759,19 @@ class Repo extends ChangeNotifier {
     return invId;
   }
 
-  /// The part of an invoice [total] paid from an advance: [percent] of it, capped by [left].
-  static int prepaidFor(int total, double percent, int left) {
-    final want = (total * percent / 100).round();
-    return want.clamp(0, left < 0 ? 0 : left);
+  /// Share (0..1) of an invoice's lines that are products of the order.
+  static double orderShare(List<OrderItem> orderItems, List<InvoiceItem> items) {
+    final sub = items.fold<int>(0, (a, it) => a + it.total);
+    if (sub <= 0) return 0;
+    final mine = items.where((it) => orderItems.any((o) => o.matches(it))).fold<int>(0, (a, it) => a + it.total);
+    return mine / sub;
   }
 
-  /// Preview used by the invoice editor: what [total] would take from the
-  /// advance of [orderId] (other invoices of the order already counted).
-  Future<int> prepaidPreview(String orderId, int total, {String? exceptInvoiceId}) async {
-    final o = (await orders()).where((x) => x.id == orderId).firstOrNull;
-    if (o == null) return 0;
-    var left = o.available;
-    if (exceptInvoiceId != null) {
-      final mine = (await invoices()).where((i) => i.id == exceptInvoiceId && i.orderId == orderId).firstOrNull;
-      if (mine != null) left += mine.prepaid;
-    }
-    return o.open || exceptInvoiceId != null ? prepaidFor(total, o.percent, left) : 0;
+  /// The part of an invoice [total] paid from an advance: [percent] of the
+  /// [share] of the invoice that is for the order's products, capped by [left].
+  static int prepaidFor(int total, double percent, int left, {double share = 1}) {
+    final want = (total * share * percent / 100).round();
+    return want.clamp(0, left < 0 ? 0 : left);
   }
 
   Future<void> deleteInvoice(String id) async {
@@ -773,24 +794,41 @@ class Repo extends ChangeNotifier {
 
   // ---- orders with an advance payment ---------------------------------------
 
+  Future<List<OrderItem>> _orderItemsOf(DatabaseExecutor ex, String orderId) async {
+    final rows = await ex.query('order_items', where: 'order_id=? AND deleted=0', whereArgs: [orderId], orderBy: 'position');
+    return [
+      for (final r in rows)
+        OrderItem(r['title'] as String, (r['qty'] as num).toDouble(), r['unit_price'] as int, productId: r['product_id'] as String?)
+    ];
+  }
+
   Future<List<Order>> orders({String? partyId}) async {
     final rows = await store.db.rawQuery('''
       SELECT o.*,
-        COALESCE((SELECT SUM(i.prepaid) FROM invoices i WHERE i.order_id=o.id AND i.deleted=0),0) AS applied,
-        COALESCE((SELECT SUM(it.qty) FROM invoice_items it JOIN invoices i ON i.id=it.invoice_id
-          WHERE i.order_id=o.id AND i.deleted=0 AND it.deleted=0
-            AND ((o.product_id IS NOT NULL AND it.product_id=o.product_id) OR (o.product_id IS NULL AND it.title=o.title))),0) AS invoiced
+        COALESCE((SELECT SUM(i.prepaid) FROM invoices i WHERE i.order_id=o.id AND i.deleted=0),0) AS applied
       FROM orders o WHERE o.deleted=0 ${partyId == null ? '' : 'AND o.party_id=?'}
       ORDER BY o.date DESC, o.number DESC''', partyId == null ? null : [partyId]);
+    final itemRows = await store.db.rawQuery('''
+      SELECT oi.*,
+        COALESCE((SELECT SUM(it.qty) FROM invoice_items it JOIN invoices i ON i.id=it.invoice_id
+          WHERE i.order_id=oi.order_id AND i.deleted=0 AND it.deleted=0
+            AND ((oi.product_id IS NOT NULL AND it.product_id=oi.product_id)
+              OR (oi.product_id IS NULL AND it.title=oi.title))),0) AS invoiced
+      FROM order_items oi JOIN orders o ON o.id=oi.order_id AND o.deleted=0
+      WHERE oi.deleted=0 ORDER BY oi.position''');
+    final byOrder = <String, List<OrderItem>>{};
+    for (final r in itemRows) {
+      (byOrder[r['order_id'] as String] ??= []).add(OrderItem(r['title'] as String, (r['qty'] as num).toDouble(),
+          r['unit_price'] as int, productId: r['product_id'] as String?, invoicedQty: (r['invoiced'] as num).toDouble()));
+    }
     return [
       for (final r in rows)
         Order(
           id: r['id'] as String, number: r['number'] as int, date: r['date'] as String, partyId: r['party_id'] as String,
-          productId: r['product_id'] as String?, title: r['title'] as String, qty: (r['qty'] as num).toDouble(),
-          unitPrice: r['unit_price'] as int, percent: (r['advance_percent'] as num).toDouble(),
+          title: r['title'] as String, items: byOrder[r['id']] ?? [], percent: (r['advance_percent'] as num).toDouble(),
           advance: r['advance_amount'] as int, accountId: r['account_id'] as String?, txId: r['tx_id'] as String?,
           status: r['status'] as String, released: r['released'] as int, closedDate: r['closed_date'] as String,
-          note: r['note'] as String, applied: (r['applied'] as num).round(), invoicedQty: (r['invoiced'] as num).toDouble(),
+          note: r['note'] as String, applied: (r['applied'] as num).round(),
         )
     ];
   }
@@ -800,23 +838,21 @@ class Repo extends ChangeNotifier {
     return r.first['n'] as int;
   }
 
-  /// Creates or edits an order. The advance is booked as a receipt into
-  /// [accountId] that has no party, so the customer does not become a
-  /// creditor; it is applied to invoices as they are issued.
+  /// Creates or edits an order with one or several products. The advance is
+  /// booked as a receipt into [accountId] that has no party, so the customer
+  /// does not become a creditor; it is applied to invoices as they are issued.
   Future<String> saveOrder({
     String? id,
     required int number,
     required String date,
     required String partyId,
-    String? productId,
-    required String title,
-    required double qty,
-    required int unitPrice,
+    required List<OrderItem> items,
     required double percent,
     required int advance,
     String? accountId,
     String note = '',
   }) async {
+    if (items.isEmpty) throw StateError('حداقل یک کالا برای سفارش لازم است.');
     if (advance > 0 && accountId == null) throw StateError('حساب دریافت پیش‌دریافت را انتخاب کنید.');
     final oid = id ?? AppDb.newId();
     await store.db.transaction((tx) async {
@@ -841,12 +877,23 @@ class Repo extends ChangeNotifier {
         await store.softDelete('transactions', txId, exec: tx);
         txId = null;
       }
+      // The order row keeps a short summary of its products (for lists).
+      final summary = items.length == 1 ? items.first.title : '${items.first.title} و ${faDigits('${items.length - 1}')} کالای دیگر';
       await store.save('orders', {
-        'id': oid, 'number': number, 'date': date, 'party_id': partyId, 'product_id': productId, 'title': title,
-        'qty': qty, 'unit_price': unitPrice, 'advance_percent': percent, 'advance_amount': advance,
+        'id': oid, 'number': number, 'date': date, 'party_id': partyId, 'product_id': null, 'title': summary,
+        'qty': items.fold<double>(0, (a, i) => a + i.qty), 'unit_price': 0, 'advance_percent': percent, 'advance_amount': advance,
         'account_id': accountId, 'tx_id': txId, 'status': old?['status'] ?? 'open', 'released': released,
         'closed_date': old?['closed_date'] ?? '', 'note': note,
       }, exec: tx);
+      for (final o in await tx.query('order_items', columns: ['id'], where: 'order_id=? AND deleted=0', whereArgs: [oid])) {
+        await store.softDelete('order_items', o['id'] as String, exec: tx);
+      }
+      for (var i = 0; i < items.length; i++) {
+        await store.save('order_items', {
+          'order_id': oid, 'product_id': items[i].productId, 'title': items[i].title, 'qty': items[i].qty,
+          'unit_price': items[i].unitPrice, 'position': i,
+        }, exec: tx);
+      }
     });
     changed();
     return oid;
@@ -871,6 +918,9 @@ class Repo extends ChangeNotifier {
     final o = (await store.db.query('orders', where: 'id=?', whereArgs: [id])).first;
     await store.db.transaction((tx) async {
       await store.softDelete('orders', id, exec: tx);
+      for (final it in await tx.query('order_items', columns: ['id'], where: 'order_id=? AND deleted=0', whereArgs: [id])) {
+        await store.softDelete('order_items', it['id'] as String, exec: tx);
+      }
       if (o['tx_id'] != null) await store.softDelete('transactions', o['tx_id'] as String, exec: tx);
     });
     changed();
@@ -1467,7 +1517,8 @@ class Repo extends ChangeNotifier {
       await scale('parties', ['opening']);
       await scale('transactions', ['amount']);
       await scale('invoices', ['discount', 'prepaid']);
-      await scale('orders', ['unit_price', 'advance_amount', 'released']);
+      await scale('orders', ['advance_amount', 'released']);
+      await scale('order_items', ['unit_price']);
       await scale('invoice_items', ['unit_price']);
       await scale('products', ['sale_price', 'buy_price']);
       await scale('cheques', ['amount']);

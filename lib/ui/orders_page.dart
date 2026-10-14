@@ -46,7 +46,7 @@ class OrdersPage extends StatelessWidget {
                             child: Text(faDigits('${list[i].number}'), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
                           ),
                           title: Text('${names[list[i].partyId] ?? '؟'} • ${list[i].title}', style: const TextStyle(fontWeight: FontWeight.w600)),
-                          subtitle: Text('تحویل‌شده ${qtyText(list[i].invoicedQty)} از ${qtyText(list[i].qty)} • پیش‌دریافت ${faDigits(qtyText(list[i].percent))}٪'),
+                          subtitle: Text('${faDigits('${list[i].items.length}')} قلم • پیش‌دریافت ${faDigits(qtyText(list[i].percent))}٪ • فاکتورشده ${faDigits('${(list[i].progress * 100).round()}')}٪'),
                           trailing: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.end, children: [
                             Text(money(list[i].total), style: const TextStyle(fontWeight: FontWeight.w700)),
                             const SizedBox(height: 4),
@@ -78,17 +78,17 @@ class OrderViewPage extends StatelessWidget {
   final String orderId;
 
   @override
-  Widget build(BuildContext context) => RepoBuilder<(Order?, Party?, List<Invoice>, String)>(
+  Widget build(BuildContext context) => RepoBuilder<(Order?, Party?, List<Invoice>, Map<String, String>)>(
         repo: repo,
         load: () async {
           final o = (await repo.orders()).where((x) => x.id == orderId).firstOrNull;
-          if (o == null) return (null, null, <Invoice>[], '');
+          if (o == null) return (null, null, <Invoice>[], <String, String>{});
           final party = (await repo.parties()).where((p) => p.id == o.partyId).firstOrNull;
-          final unit = (await repo.products()).where((p) => p.id == o.productId).firstOrNull?.unit ?? '';
-          return (o, party, (await repo.invoices()).where((i) => i.orderId == o.id).toList(), unit);
+          final units = {for (final p in await repo.products()) p.id: p.unit};
+          return (o, party, (await repo.invoices()).where((i) => i.orderId == o.id).toList(), units);
         },
         builder: (c, d) {
-          final (o, party, invoices, unit) = d;
+          final (o, party, invoices, units) = d;
           if (o == null) return const Scaffold(body: Center(child: Text('این سفارش حذف شد.')));
           Widget row(String l, String v, {bool bold = false}) => Padding(
                 padding: const EdgeInsets.symmetric(vertical: 3),
@@ -133,14 +133,23 @@ class OrderViewPage extends StatelessWidget {
                       Text('تاریخ: ${jalaliText(o.date)}'),
                       if (o.note.isNotEmpty) Text('توضیحات: ${o.note}'),
                       const Divider(height: 24),
-                      row('کالا', o.title),
-                      row('تعداد سفارش', '${qtyText(o.qty)} $unit'.trim()),
-                      row('قیمت واحد', money(o.unitPrice)),
+                      Text('کالاهای سفارش', style: Theme.of(c).textTheme.titleSmall),
+                      const SizedBox(height: 6),
+                      for (final it in o.items) ...[
+                        Row(children: [
+                          Expanded(child: Text(it.title, style: const TextStyle(fontWeight: FontWeight.w600))),
+                          Text(money(it.total)),
+                        ]),
+                        Text(
+                          '${qtyText(it.qty)} ${units[it.productId] ?? ''} × ${money(it.unitPrice)}  •  فاکتورشده ${qtyText(it.invoicedQty)} از ${qtyText(it.qty)}',
+                          style: Theme.of(c).textTheme.bodySmall,
+                        ),
+                        const SizedBox(height: 4),
+                        LinearProgressIndicator(value: it.qty <= 0 ? 0 : (it.invoicedQty / it.qty).clamp(0, 1).toDouble()),
+                        const SizedBox(height: 10),
+                      ],
+                      const Divider(height: 16),
                       row('جمع سفارش', moneyC(o.total), bold: true),
-                      const SizedBox(height: 8),
-                      LinearProgressIndicator(value: o.qty <= 0 ? 0 : (o.invoicedQty / o.qty).clamp(0, 1).toDouble()),
-                      const SizedBox(height: 4),
-                      Text('فاکتورشده ${qtyText(o.invoicedQty)} از ${qtyText(o.qty)} (مانده ${qtyText(o.remainingQty < 0 ? 0 : o.remainingQty)})', style: Theme.of(c).textTheme.bodySmall),
                     ]),
                   ),
                 ),
@@ -210,21 +219,39 @@ class OrderEditPage extends StatefulWidget {
   State<OrderEditPage> createState() => _OrderEditPageState();
 }
 
+
+/// One product row of the order form.
+class _OLine {
+  _OLine({String t = '', String q = '1', String p = '', this.productId})
+      : title = TextEditingController(text: t),
+        qty = TextEditingController(text: q),
+        price = TextEditingController(text: p);
+  final TextEditingController title, qty, price;
+  final focus = FocusNode();
+  String? productId;
+  double get q => parseQty(qty.text);
+  int get total => (q * parseAmount(price.text)).round();
+
+  void dispose() {
+    title.dispose();
+    qty.dispose();
+    price.dispose();
+    focus.dispose();
+  }
+}
+
 class _OrderEditPageState extends State<OrderEditPage> {
   final key = GlobalKey<FormState>();
   final number = TextEditingController();
-  final title = TextEditingController();
-  final qty = TextEditingController(text: '1');
-  final price = TextEditingController();
   final percent = TextEditingController(text: '50');
   final advance = TextEditingController();
   final note = TextEditingController();
-  final focus = FocusNode();
+  final lines = <_OLine>[];
   List<Party> parties = [];
   List<Product> products = [];
   List<Account> accounts = [];
   String date = todayIso();
-  String? partyId, productId, accountId;
+  String? partyId, accountId;
   bool loaded = false;
   bool advanceTouched = false;
   String _autoText = '';
@@ -234,19 +261,32 @@ class _OrderEditPageState extends State<OrderEditPage> {
   @override
   void initState() {
     super.initState();
-    for (final c in [qty, price, percent]) {
-      c.addListener(_syncAdvance);
-    }
+    percent.addListener(_syncAdvance);
     _load();
   }
 
   @override
   void dispose() {
-    for (final c in [number, title, qty, price, percent, advance, note]) {
+    for (final c in [number, percent, advance, note]) {
       c.dispose();
     }
-    focus.dispose();
+    for (final l in lines) {
+      _drop(l);
+    }
     super.dispose();
+  }
+
+  _OLine _newLine({String t = '', String q = '1', String p = '', String? productId}) {
+    final l = _OLine(t: t, q: q, p: p, productId: productId);
+    l.qty.addListener(_syncAdvance);
+    l.price.addListener(_syncAdvance);
+    return l;
+  }
+
+  void _drop(_OLine l) {
+    l.qty.removeListener(_syncAdvance);
+    l.price.removeListener(_syncAdvance);
+    l.dispose();
   }
 
   Future<void> _load() async {
@@ -258,27 +298,26 @@ class _OrderEditPageState extends State<OrderEditPage> {
       number.text = '${o.number}';
       date = o.date;
       partyId = o.partyId;
-      productId = o.productId;
-      title.text = o.title;
-      qty.text = qtyText(o.qty);
-      price.text = money(o.unitPrice);
       percent.text = qtyText(o.percent);
       advance.text = money(o.advance);
       advanceTouched = true;
       accountId = o.accountId;
       note.text = o.note;
+      for (final it in o.items) {
+        lines.add(_newLine(t: it.title, q: qtyText(it.qty), p: money(it.unitPrice), productId: it.productId));
+      }
     } else {
       number.text = '${await repo.nextOrderNumber()}';
       accountId = accounts.firstOrNull?.id;
     }
+    if (lines.isEmpty) lines.add(_newLine());
     if (mounted) setState(() => loaded = true);
   }
 
-  double get _qty => parseQty(qty.text);
   double get _pct => parseQty(percent.text).clamp(0, 100).toDouble();
-  int get _total => (_qty * parseAmount(price.text)).round();
+  int get _total => lines.fold(0, (a, l) => a + l.total);
 
-  /// The advance follows qty x price x percent until it is typed by hand.
+  /// The advance follows total x percent until it is typed by hand.
   void _syncAdvance() {
     if (advanceTouched || !loaded) return;
     final v = (_total * _pct / 100).round();
@@ -286,10 +325,10 @@ class _OrderEditPageState extends State<OrderEditPage> {
     advance.text = _autoText;
   }
 
-  void _pick(Product p) {
-    productId = p.id;
-    title.text = p.name;
-    if (p.salePrice > 0) price.text = money(p.salePrice);
+  void _pick(_OLine l, Product p) {
+    l.productId = p.id;
+    l.title.text = p.name;
+    if (p.salePrice > 0) l.price.text = money(p.salePrice);
     setState(() {});
   }
 
@@ -301,10 +340,7 @@ class _OrderEditPageState extends State<OrderEditPage> {
         number: parseAmount(number.text),
         date: date,
         partyId: partyId!,
-        productId: productId,
-        title: title.text.trim(),
-        qty: _qty,
-        unitPrice: parseAmount(price.text),
+        items: [for (final l in lines) OrderItem(l.title.text.trim(), l.q, parseAmount(l.price.text), productId: l.productId)],
         percent: _pct,
         advance: parseAmount(advance.text),
         accountId: accountId,
@@ -374,65 +410,19 @@ class _OrderEditPageState extends State<OrderEditPage> {
             ),
             gap(16),
             Section(
-              title: 'کالای سفارش‌داده‌شده',
+              title: 'کالاهای سفارش‌داده‌شده',
               child: Column(children: [
-                LayoutBuilder(
-                  builder: (context, box) => RawAutocomplete<Product>(
-                    textEditingController: title,
-                    focusNode: focus,
-                    displayStringForOption: (p) => p.name,
-                    optionsBuilder: (v) {
-                      final t = v.text.trim();
-                      if (products.isEmpty) return const Iterable<Product>.empty();
-                      return products.where((p) => t.isEmpty || p.name.contains(t) || (p.code.isNotEmpty && p.code.contains(enDigits(t)))).take(8);
-                    },
-                    onSelected: _pick,
-                    fieldViewBuilder: (c, ctl, fn, _) => TextFormField(
-                      controller: ctl,
-                      focusNode: fn,
-                      decoration: InputDecoration(labelText: 'کالا', suffixIcon: products.isEmpty ? null : const Icon(Icons.search)),
-                      onChanged: (v) {
-                        final p = products.where((p) => p.id == productId).firstOrNull;
-                        if (p != null && p.name != v) productId = null;
-                      },
-                      validator: (v) => (v ?? '').trim().isEmpty ? 'نام کالا؟' : null,
-                    ),
-                    optionsViewBuilder: (c, onSel, opts) => Align(
-                      alignment: AlignmentDirectional.topStart,
-                      child: Material(
-                        elevation: 6,
-                        borderRadius: BorderRadius.circular(12),
-                        child: ConstrainedBox(
-                          constraints: BoxConstraints(maxHeight: 260, maxWidth: box.maxWidth),
-                          child: ListView(
-                            padding: EdgeInsets.zero,
-                            shrinkWrap: true,
-                            children: [
-                              for (final p in opts)
-                                ListTile(dense: true, title: Text(p.name), subtitle: Text('موجودی ${qtyText(p.stock)} ${p.unit} • ${money(p.salePrice)}'), onTap: () => onSel(p)),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
+                for (var i = 0; i < lines.length; i++) _lineRow(i),
+                Align(
+                  alignment: AlignmentDirectional.centerStart,
+                  child: TextButton.icon(
+                    onPressed: () => setState(() => lines.add(_newLine())),
+                    icon: const Icon(Icons.add),
+                    label: const Text('افزودن کالا'),
                   ),
                 ),
-                gap(),
-                Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Expanded(
-                    child: TextFormField(
-                      controller: qty,
-                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                      decoration: const InputDecoration(labelText: 'کل تعداد سفارش'),
-                      validator: (v) => _qty <= 0 ? 'نامعتبر' : null,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(child: AmountField(controller: price, label: 'قیمت واحد')),
-                ]),
-                gap(),
                 ListenableBuilder(
-                  listenable: Listenable.merge([qty, price]),
+                  listenable: Listenable.merge([for (final l in lines) ...[l.qty, l.price]]),
                   builder: (_, _) => Align(
                     alignment: AlignmentDirectional.centerStart,
                     child: Text('جمع سفارش: ${moneyC(_total)}', style: const TextStyle(fontWeight: FontWeight.w700)),
@@ -479,7 +469,7 @@ class _OrderEditPageState extends State<OrderEditPage> {
                 ),
                 gap(),
                 Text(
-                  'این مبلغ به حساب انتخاب‌شده اضافه می‌شود ولی مشتری بستانکار نمی‌شود. روی هر فاکتور فروشِ این سفارش، این درصد از جمع فاکتور پرداخت‌شده حساب می‌شود.',
+                  'این مبلغ به حساب انتخاب‌شده اضافه می‌شود ولی مشتری بستانکار نمی‌شود. روی هر فاکتور فروش این سفارش، این درصد از بخشی از فاکتور که کالای همین سفارش است پرداخت‌شده حساب می‌شود (کالاهای دیگر فاکتور کسر ندارند).',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ]),
@@ -491,6 +481,88 @@ class _OrderEditPageState extends State<OrderEditPage> {
           ]),
         ),
       ),
+    );
+  }
+
+  Widget _lineRow(int i) {
+    final l = lines[i];
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Column(children: [
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Expanded(
+            child: LayoutBuilder(
+              builder: (context, box) => RawAutocomplete<Product>(
+                textEditingController: l.title,
+                focusNode: l.focus,
+                displayStringForOption: (p) => p.name,
+                optionsBuilder: (v) {
+                  final t = v.text.trim();
+                  if (products.isEmpty) return const Iterable<Product>.empty();
+                  return products.where((p) => t.isEmpty || p.name.contains(t) || (p.code.isNotEmpty && p.code.contains(enDigits(t)))).take(8);
+                },
+                onSelected: (p) => _pick(l, p),
+                fieldViewBuilder: (c, ctl, fn, _) => TextFormField(
+                  controller: ctl,
+                  focusNode: fn,
+                  decoration: InputDecoration(labelText: 'کالا', suffixIcon: products.isEmpty ? null : const Icon(Icons.search)),
+                  onChanged: (v) {
+                    final p = products.where((p) => p.id == l.productId).firstOrNull;
+                    if (p != null && p.name != v) l.productId = null;
+                  },
+                  validator: (v) => (v ?? '').trim().isEmpty ? 'نام کالا؟' : null,
+                ),
+                optionsViewBuilder: (c, onSel, opts) => Align(
+                  alignment: AlignmentDirectional.topStart,
+                  child: Material(
+                    elevation: 6,
+                    borderRadius: BorderRadius.circular(12),
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(maxHeight: 260, maxWidth: box.maxWidth),
+                      child: ListView(
+                        padding: EdgeInsets.zero,
+                        shrinkWrap: true,
+                        children: [
+                          for (final p in opts)
+                            ListTile(dense: true, title: Text(p.name), subtitle: Text('موجودی ${qtyText(p.stock)} ${p.unit} • ${money(p.salePrice)}'), onTap: () => onSel(p)),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          IconButton(
+            tooltip: 'حذف کالا',
+            onPressed: lines.length == 1
+                ? null
+                : () => setState(() {
+                      _drop(lines.removeAt(i));
+                      _syncAdvance();
+                    }),
+            icon: const Icon(Icons.close),
+          ),
+        ]),
+        const SizedBox(height: 10),
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Expanded(
+            child: TextFormField(
+              controller: l.qty,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(labelText: 'تعداد سفارش'),
+              validator: (v) => l.q <= 0 ? 'نامعتبر' : null,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(child: AmountField(controller: l.price, label: 'قیمت واحد')),
+        ]),
+      ]),
     );
   }
 }

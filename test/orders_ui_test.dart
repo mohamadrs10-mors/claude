@@ -34,6 +34,7 @@ TextEditingController field(WidgetTester t, String label) => t.widget<TextFormFi
 
 void main() {
   flowTests();
+  multiTests();
   testWidgets('order form: advance follows qty x price x percent, saves into the cash box without crediting the customer', (tester) async {
     tester.view.physicalSize = const Size(1000, 2600);
     tester.view.devicePixelRatio = 1;
@@ -47,7 +48,7 @@ void main() {
     await tester.tap(find.text('مشتری').last);
     await tester.pumpAndSettle();
     await tester.enterText(find.widgetWithText(TextFormField, 'کالا'), 'برنج');
-    await tester.enterText(field2(tester, 'کل تعداد سفارش'), '100');
+    await tester.enterText(field2(tester, 'تعداد سفارش'), '100');
     await tester.enterText(field2(tester, 'قیمت واحد'), '1000');
     await tester.pump();
     expect(parseAmount(field(tester, 'مبلغ دریافت‌شده').text), 50000);
@@ -73,7 +74,7 @@ void main() {
       party = (await repo.parties()).single;
       final acc = (await repo.accounts()).single;
       final prod = (await repo.products()).single;
-      await repo.saveOrder(number: 1, date: todayIso(), partyId: party.id, productId: prod.id, title: 'برنج', qty: 100, unitPrice: 1000, percent: 50, advance: 50000, accountId: acc.id);
+      await repo.saveOrder(number: 1, date: todayIso(), partyId: party.id, items: [OrderItem('برنج', 100, 1000, productId: prod.id)], percent: 50, advance: 50000, accountId: acc.id);
     });
     final order = (await tester.runAsync(repo.orders))!.single;
     await tester.pumpWidget(MaterialApp(home: Directionality(textDirection: TextDirection.rtl, child: InvoiceEditPage(repo: repo, initialPartyId: party.id, initialOrderId: order.id))));
@@ -93,6 +94,56 @@ void main() {
 
 Finder field2(WidgetTester t, String label) => find.widgetWithText(TextFormField, label);
 
+void multiTests() {
+  testWidgets('order with two products via the form; its invoice is pre-filled with both and takes the advance', (tester) async {
+    tester.view.physicalSize = const Size(1000, 3200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final repo = await seed(tester);
+    await tester.runAsync(() => repo.saveProduct(name: 'روغن', unit: 'گالن', salePrice: 2000, buyPrice: 1500, openingStock: 100, minStock: 0));
+    await tester.pumpWidget(MaterialApp(home: Directionality(textDirection: TextDirection.rtl, child: OrderEditPage(repo: repo))));
+    await settle(tester);
+
+    await tester.tap(find.widgetWithText(DropdownButtonFormField<String?>, 'مشتری'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('مشتری').last);
+    await tester.pumpAndSettle();
+
+    Future<void> pickProduct(int index, String typed) async {
+      await tester.enterText(find.widgetWithText(TextFormField, 'کالا').at(index), typed);
+      await tester.pumpAndSettle();
+      await tester.tap(find.textContaining('موجودی').first);
+      await tester.pumpAndSettle();
+    }
+
+    await pickProduct(0, 'برن');
+    await tester.enterText(find.widgetWithText(TextFormField, 'تعداد سفارش').at(0), '100');
+    await tester.tap(find.text('افزودن کالا'));
+    await tester.pumpAndSettle();
+    await pickProduct(1, 'روغ');
+    await tester.enterText(find.widgetWithText(TextFormField, 'تعداد سفارش').at(1), '50');
+    await tester.pump();
+    expect(parseAmount(field(tester, 'مبلغ دریافت‌شده').text), 100000); // 50% of 100x1000 + 50x2000
+
+    await tester.tap(find.text('ذخیره سفارش'));
+    await settle(tester);
+    final o = (await tester.runAsync(repo.orders))!.single;
+    expect(o.items.map((i) => (i.title, i.qty, i.unitPrice)).toList(), [('برنج', 100.0, 1000), ('روغن', 50.0, 2000)]);
+    expect((o.total, o.advance), (200000, 100000));
+
+    final party = (await tester.runAsync(repo.parties))!.single;
+    await tester.pumpWidget(const SizedBox()); // fully leave the order form
+    await tester.pumpWidget(MaterialApp(home: Directionality(textDirection: TextDirection.rtl, child: InvoiceEditPage(repo: repo, initialPartyId: party.id, initialOrderId: o.id))));
+    await settle(tester);
+    expect(find.widgetWithText(TextFormField, 'کالا / شرح'), findsNWidgets(2));
+    await tester.tap(find.text('ذخیره فاکتور'));
+    await settle(tester);
+    await settle(tester);
+    final inv = (await tester.runAsync(repo.invoices))!.single;
+    expect((inv.total, inv.prepaid, inv.remaining), (200000, 100000, 100000));
+  });
+}
+
 void flowTests() {
   testWidgets('new invoice from the invoices page: choosing the customer offers the order and the advance is deducted', (tester) async {
     tester.view.physicalSize = const Size(1000, 2600);
@@ -103,7 +154,7 @@ void flowTests() {
       final party = (await repo.parties()).single;
       final acc = (await repo.accounts()).single;
       final prod = (await repo.products()).single;
-      await repo.saveOrder(number: 1, date: todayIso(), partyId: party.id, productId: prod.id, title: 'برنج', qty: 100, unitPrice: 1000, percent: 50, advance: 50000, accountId: acc.id);
+      await repo.saveOrder(number: 1, date: todayIso(), partyId: party.id, items: [OrderItem('برنج', 100, 1000, productId: prod.id)], percent: 50, advance: 50000, accountId: acc.id);
     });
     await tester.pumpWidget(MaterialApp(home: Directionality(textDirection: TextDirection.rtl, child: InvoiceEditPage(repo: repo))));
     await settle(tester);
