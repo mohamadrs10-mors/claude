@@ -6,6 +6,7 @@ import '../print/report_builders.dart';
 import '../util/format.dart';
 import 'common.dart';
 import 'parties_page.dart';
+import '../print/delivery_doc.dart';
 import 'print_dialog.dart';
 import 'products_page.dart';
 import 'transactions_page.dart';
@@ -158,9 +159,14 @@ class InvoiceViewPage extends StatelessWidget {
                 PopupMenuButton<String>(
                   tooltip: 'چاپ و اشتراک‌گذاری',
                   icon: const Icon(Icons.print_outlined),
-                  onSelected: (v) => v == 'roll' ? printRoll() : openPrint(),
+                  onSelected: (v) => switch (v) {
+                    'roll' => printRoll(),
+                    'delivery' => printDeliveryOf(c, repo, inv, items, party),
+                    _ => openPrint(),
+                  },
                   itemBuilder: (_) => [
                     const PopupMenuItem(value: 'page', child: ListTile(leading: Icon(Icons.description_outlined), title: Text('چاپ فاکتور (A4 / A5) و PDF'))),
+                    const PopupMenuItem(value: 'delivery', child: ListTile(leading: Icon(Icons.local_shipping_outlined), title: Text('چاپ رسید تحویل (بدون قیمت)'))),
                     PopupMenuItem(value: 'roll', child: ListTile(leading: const Icon(Icons.receipt_outlined), title: Text('چاپ رسید حرارتی ${faDigits('${repo.printSettings.rollWidthMm}')} میلی‌متری'))),
                   ],
                 ),
@@ -676,4 +682,10 @@ class _InvoiceEditPageState extends State<InvoiceEditPage> {
     );
     if (mounted) Navigator.pop(context);
   }
+}
+
+/// Delivery receipt of an invoice: same goods, no prices.
+Future<void> printDeliveryOf(BuildContext c, Repo repo, Invoice inv, List<InvoiceItem> items, Party? party) async {
+  final doc = DeliveryDoc.fromInvoice(inv, items, party, await repo.products());
+  if (c.mounted) await printDelivery(c, repo, doc);
 }

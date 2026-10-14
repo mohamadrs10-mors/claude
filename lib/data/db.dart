@@ -19,9 +19,11 @@ const syncTables = [
   'invoices',
   'invoice_items',
   'transactions',
+  'deliveries',
+  'delivery_items',
 ];
 
-const _schemaVersion = 4;
+const _schemaVersion = 5;
 
 const _v2Tables = [
   '''CREATE TABLE products (
@@ -57,6 +59,24 @@ const _v3Tables = [
     name TEXT NOT NULL, expression TEXT NOT NULL)''',
 ];
 
+/// Delivery receipts (رسید تحویل): a document without prices that is not tied
+/// to an invoice. Neither table touches balances or stock.
+const _v5Tables = [
+  '''CREATE TABLE deliveries (
+    id TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
+    device_id TEXT NOT NULL, seq INTEGER NOT NULL,
+    number INTEGER NOT NULL, date TEXT NOT NULL, party_id TEXT,
+    recipient TEXT NOT NULL DEFAULT '', address TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '')''',
+  '''CREATE TABLE delivery_items (
+    id TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
+    device_id TEXT NOT NULL, seq INTEGER NOT NULL,
+    delivery_id TEXT NOT NULL, title TEXT NOT NULL, qty REAL NOT NULL,
+    unit TEXT NOT NULL DEFAULT '', position INTEGER NOT NULL DEFAULT 0, product_id TEXT)''',
+  'CREATE INDEX idx_delivery_items_dlv ON delivery_items(delivery_id)',
+  'CREATE INDEX idx_deliveries_seq ON deliveries(seq)',
+  'CREATE INDEX idx_delivery_items_seq ON delivery_items(seq)',
+];
+
 /// Upgrade 3 -> 4: opening balance of a party, transfers between accounts,
 /// the link from a pro-forma to the invoice made from it.
 const _migrate3to4 = [
@@ -81,6 +101,9 @@ const _migrate1to2 = [
   'CREATE INDEX idx_cheques_seq ON cheques(seq)',
   'CREATE INDEX idx_settings_seq ON settings(seq)',
 ];
+
+/// Upgrade 4 -> 5: delivery receipts.
+const _migrate4to5 = _v5Tables;
 
 final _schema = [
   '''CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)''',
@@ -110,6 +133,7 @@ final _schema = [
     unit_price INTEGER NOT NULL, position INTEGER NOT NULL DEFAULT 0, product_id TEXT)''',
   ..._v2Tables,
   ..._v3Tables,
+  ..._v5Tables,
   '''CREATE TABLE transactions (
     id TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
     device_id TEXT NOT NULL, seq INTEGER NOT NULL,
@@ -119,7 +143,8 @@ final _schema = [
   'CREATE INDEX idx_tx_date ON transactions(date)',
   'CREATE INDEX idx_tx_party ON transactions(party_id)',
   'CREATE INDEX idx_items_inv ON invoice_items(invoice_id)',
-  for (final t in syncTables) 'CREATE INDEX idx_${t}_seq ON $t(seq)',
+  for (final t in syncTables)
+    if (t != 'deliveries' && t != 'delivery_items') 'CREATE INDEX idx_${t}_seq ON $t(seq)',
 ];
 
 /// Thin wrapper around the SQLite database that stamps every write with the
@@ -157,6 +182,11 @@ class AppDb {
           }
           if (from < 4) {
             for (final q in _migrate3to4) {
+              await db.execute(q);
+            }
+          }
+          if (from < 5) {
+            for (final q in _migrate4to5) {
               await db.execute(q);
             }
           }

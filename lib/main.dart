@@ -15,6 +15,7 @@ import 'ui/cheques_page.dart';
 import 'ui/companies_page.dart';
 import 'ui/costing_page.dart';
 import 'ui/dashboard_page.dart';
+import 'ui/deliveries_page.dart';
 import 'ui/invoices_page.dart';
 import 'ui/lock_screen.dart';
 import 'ui/parties_page.dart';
@@ -126,6 +127,7 @@ const _dests = [
   _Dest('dashboard', 'داشبورد', Icons.space_dashboard_outlined, Icons.space_dashboard),
   _Dest('transactions', 'تراکنش‌ها', Icons.swap_vert, Icons.swap_vert),
   _Dest('invoices', 'فاکتورها', Icons.receipt_long_outlined, Icons.receipt_long),
+  _Dest('deliveries', 'رسید تحویل', Icons.local_shipping_outlined, Icons.local_shipping),
   _Dest('products', 'کالاها و انبار', Icons.inventory_2_outlined, Icons.inventory_2),
   _Dest('pricing', 'قیمت‌گذاری', Icons.calculate_outlined, Icons.calculate),
   _Dest('parties', 'اشخاص', Icons.people_outline, Icons.people),
@@ -164,6 +166,7 @@ class _HomePageState extends State<HomePage> {
         'dashboard' => DashboardPage(repo: widget.repo, onNavigate: _go),
         'transactions' => TransactionsPage(repo: widget.repo),
         'invoices' => InvoicesPage(repo: widget.repo),
+        'deliveries' => DeliveriesPage(repo: widget.repo),
         'products' => ProductsPage(repo: widget.repo),
         'pricing' => CostingPage(repo: widget.repo, embedded: true),
         'parties' => PartiesPage(repo: widget.repo),

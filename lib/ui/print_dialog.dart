@@ -5,6 +5,7 @@ import 'package:pdf/pdf.dart';
 import 'package:shamsi_date/shamsi_date.dart';
 
 import '../data/repo.dart';
+import '../print/delivery_doc.dart';
 import '../print/pdf_docs.dart';
 import '../print/print_settings.dart';
 import '../print/report_doc.dart';
@@ -210,5 +211,29 @@ Future<void> showStatementPrint(BuildContext context, Repo repo, Party party) {
       final (from, to) = range.range;
       return PdfDocs(repo, settings: s).statement(party, from: from, toExclusive: to, periodLabel: range.label, format: f);
     },
+  );
+}
+
+/// Prints a delivery receipt (no prices) with an optional stamp and signature
+/// area for the deliverer and the receiver. The choice is remembered.
+Future<void> printDelivery(BuildContext context, Repo repo, DeliveryDoc doc) {
+  var sign = repo.setting('delivery_sign', '1') == '1';
+  return showPrintDialog(
+    context,
+    repo,
+    title: 'رسید تحویل ${faDigits(doc.number)}',
+    filename: 'delivery-${doc.number}.pdf',
+    build: (s, f) => PdfDocs(repo, settings: s).delivery(doc, signatures: sign, format: f),
+    options: StatefulBuilder(
+      builder: (c, set) => SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        title: const Text('محل مهر و امضای تحویل‌دهنده و تحویل‌گیرنده'),
+        value: sign,
+        onChanged: (v) {
+          set(() => sign = v);
+          repo.setSetting('delivery_sign', v ? '1' : '0');
+        },
+      ),
+    ),
   );
 }

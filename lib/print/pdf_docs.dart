@@ -8,6 +8,7 @@ import 'package:printing/printing.dart';
 
 import '../data/repo.dart';
 import '../util/format.dart';
+import 'delivery_doc.dart';
 import 'print_settings.dart';
 import 'report_doc.dart';
 
@@ -376,6 +377,122 @@ class PdfDocs {
         ]),
         if (footer.isNotEmpty) ...[
           pw.SizedBox(height: 18),
+          pw.Center(child: _text(footer, size: 9, color: PdfColors.grey700)),
+        ],
+      ],
+    ));
+    return doc.save();
+  }
+
+  // ---- delivery receipt ---------------------------------------------------
+
+  /// Delivery receipt: the goods only, never a price. With [signatures] the
+  /// page ends in boxes for the stamp and signature of whoever hands the goods
+  /// over and whoever receives them.
+  Future<Uint8List> delivery(DeliveryDoc d, {bool signatures = true, PdfPageFormat? format}) async {
+    final doc = pw.Document(title: 'رسید تحویل ${d.number}', author: _business);
+    final theme = await _theme();
+    final phone = repo.setting('business_phone');
+    final address = repo.setting('business_address');
+    final footer = repo.setting('invoice_footer');
+
+    pw.Widget signBox(String who) => pw.Expanded(
+          child: pw.Container(
+            height: 96,
+            padding: const pw.EdgeInsets.all(8),
+            decoration: pw.BoxDecoration(border: pw.Border.all(color: _line), borderRadius: pw.BorderRadius.circular(6)),
+            child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+              _text(who, size: 11, bold: true),
+              pw.SizedBox(height: 4),
+              _text('نام و نام خانوادگی:', size: 9, color: PdfColors.grey700),
+              pw.Spacer(),
+              _text('مهر و امضا', size: 9, color: PdfColors.grey700),
+            ]),
+          ),
+        );
+
+    doc.addPage(pw.MultiPage(
+      pageFormat: format ?? s.format,
+      margin: _margin,
+      textDirection: pw.TextDirection.rtl,
+      theme: theme,
+      footer: _footer,
+      build: (c) => [
+        pw.Container(
+          padding: const pw.EdgeInsets.all(12),
+          decoration: pw.BoxDecoration(color: _accent, borderRadius: pw.BorderRadius.circular(8)),
+          child: pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+            if (_logo != null) ...[_logoBox(_logo!, 54), pw.SizedBox(width: 10)],
+            pw.Expanded(
+              child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+                _text(_business, size: 17, bold: true, color: PdfColors.white),
+                if (address.isNotEmpty) _text(address, size: 9, color: PdfColors.white),
+                if (phone.isNotEmpty) _text('تلفن: ${faDigits(phone)}', size: 9, color: PdfColors.white),
+              ]),
+            ),
+            pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.end, children: [
+              _text('رسید تحویل', size: 17, bold: true, color: PdfColors.white),
+              _text('شماره: ${faDigits(d.number)}', color: PdfColors.white),
+              _text('تاریخ: ${jalaliText(d.date)}', color: PdfColors.white),
+            ]),
+          ]),
+        ),
+        pw.SizedBox(height: 10),
+        pw.Container(
+          width: double.infinity,
+          padding: const pw.EdgeInsets.all(8),
+          decoration: pw.BoxDecoration(border: pw.Border.all(color: _line), borderRadius: pw.BorderRadius.circular(6)),
+          child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+            _text('${d.partyLabel}: ${d.partyName.isEmpty ? '—' : d.partyName}', size: 11, bold: true),
+            if (d.phone.isNotEmpty) _text('تلفن: ${faDigits(d.phone)}', size: 9),
+            if (d.address.isNotEmpty) _text('نشانی: ${d.address}', size: 9),
+            if (d.ref.isNotEmpty) _text(d.ref, size: 9),
+          ]),
+        ),
+        pw.SizedBox(height: 10),
+        pw.Table(
+          border: pw.TableBorder.all(color: _line, width: 0.6),
+          columnWidths: _widths(const [
+            pw.FixedColumnWidth(36),
+            pw.FlexColumnWidth(5),
+            pw.FixedColumnWidth(60),
+            pw.FixedColumnWidth(60),
+          ]),
+          children: [
+            _row([
+              _cell('ردیف', bold: true, col: Col.center),
+              _cell('شرح کالا', bold: true),
+              _cell('تعداد', bold: true, col: Col.center),
+              _cell('واحد', bold: true, col: Col.center),
+            ], background: _soft, repeat: true),
+            for (var i = 0; i < d.lines.length; i++)
+              _row([
+                _cell(faDigits('${i + 1}'), col: Col.center),
+                _cell(d.lines[i].$1),
+                _cell(_qty(d.lines[i].$2), col: Col.center),
+                _cell(d.lines[i].$3, col: Col.center),
+              ]),
+          ],
+        ),
+        pw.SizedBox(height: 6),
+        _text('تعداد اقلام: ${faDigits('${d.lines.length}')} ردیف', size: 9, color: PdfColors.grey700),
+        if (d.note.isNotEmpty) ...[
+          pw.SizedBox(height: 8),
+          pw.Container(
+            width: double.infinity,
+            padding: const pw.EdgeInsets.all(8),
+            decoration: pw.BoxDecoration(border: pw.Border.all(color: _line), borderRadius: pw.BorderRadius.circular(6)),
+            child: _text('توضیحات: ${d.note}', size: 9),
+          ),
+        ],
+        if (signatures) ...[
+          pw.SizedBox(height: 14),
+          _text('اقلام فوق به‌طور کامل و سالم تحویل گردید.', size: 9),
+          pw.SizedBox(height: 8),
+          pw.Row(children: [signBox('تحویل‌دهنده'), pw.SizedBox(width: 14), signBox('تحویل‌گیرنده')]),
+        ],
+        if (footer.isNotEmpty) ...[
+          pw.SizedBox(height: 14),
           pw.Center(child: _text(footer, size: 9, color: PdfColors.grey700)),
         ],
       ],

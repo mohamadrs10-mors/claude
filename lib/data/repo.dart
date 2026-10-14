@@ -97,6 +97,22 @@ class InvoiceItem {
   int get total => (qty * unitPrice).round();
 }
 
+/// A delivery receipt (رسید تحویل) that is not tied to an invoice. It has no
+/// prices and changes neither balances nor stock.
+class Delivery {
+  Delivery(this.id, this.number, this.date, this.partyId, this.recipient, this.address, this.note);
+  final String id, date, recipient, address, note;
+  final int number;
+  final String? partyId;
+}
+
+class DeliveryItem {
+  DeliveryItem(this.title, this.qty, {this.unit = '', this.productId});
+  final String title, unit;
+  final double qty;
+  final String? productId;
+}
+
 /// The four kinds of invoice and how each one affects the party balance and
 /// the stock.
 class InvoiceKind {
@@ -678,6 +694,77 @@ class Repo extends ChangeNotifier {
           where: 'invoice_id=? AND deleted=0', whereArgs: [id]);
       for (final t in txs) {
         await store.save('transactions', {...t, 'invoice_id': null}, exec: tx);
+      }
+    });
+    changed();
+  }
+
+  // ---- delivery receipts --------------------------------------------------
+
+  Future<List<Delivery>> deliveries() async {
+    final rows = await store.db.query('deliveries', where: 'deleted=0', orderBy: 'date DESC, number DESC');
+    return [
+      for (final r in rows)
+        Delivery(r['id'] as String, r['number'] as int, r['date'] as String, r['party_id'] as String?,
+            r['recipient'] as String, r['address'] as String, r['note'] as String)
+    ];
+  }
+
+  Future<List<DeliveryItem>> deliveryItems(String deliveryId) async {
+    final rows = await store.db.query('delivery_items',
+        where: 'delivery_id=? AND deleted=0', whereArgs: [deliveryId], orderBy: 'position');
+    return [
+      for (final r in rows)
+        DeliveryItem(r['title'] as String, (r['qty'] as num).toDouble(),
+            unit: r['unit'] as String, productId: r['product_id'] as String?)
+    ];
+  }
+
+  Future<int> nextDeliveryNumber() async {
+    final r = await store.db.rawQuery('SELECT COALESCE(MAX(number),0)+1 AS n FROM deliveries WHERE deleted=0');
+    return r.first['n'] as int;
+  }
+
+  /// Creates or replaces a delivery receipt together with its items.
+  Future<String> saveDelivery({
+    String? id,
+    required int number,
+    required String date,
+    String? partyId,
+    String recipient = '',
+    String address = '',
+    String note = '',
+    required List<DeliveryItem> items,
+  }) async {
+    final did = id ?? AppDb.newId();
+    await store.db.transaction((tx) async {
+      await store.save('deliveries', {
+        'id': did, 'number': number, 'date': date, 'party_id': partyId,
+        'recipient': recipient, 'address': address, 'note': note,
+      }, exec: tx);
+      final old = await tx.query('delivery_items',
+          columns: ['id'], where: 'delivery_id=? AND deleted=0', whereArgs: [did]);
+      for (final o in old) {
+        await store.softDelete('delivery_items', o['id'] as String, exec: tx);
+      }
+      for (var i = 0; i < items.length; i++) {
+        await store.save('delivery_items', {
+          'delivery_id': did, 'title': items[i].title, 'qty': items[i].qty,
+          'unit': items[i].unit, 'position': i, 'product_id': items[i].productId,
+        }, exec: tx);
+      }
+    });
+    changed();
+    return did;
+  }
+
+  Future<void> deleteDelivery(String id) async {
+    await store.db.transaction((tx) async {
+      await store.softDelete('deliveries', id, exec: tx);
+      final items = await tx.query('delivery_items',
+          columns: ['id'], where: 'delivery_id=? AND deleted=0', whereArgs: [id]);
+      for (final o in items) {
+        await store.softDelete('delivery_items', o['id'] as String, exec: tx);
       }
     });
     changed();
