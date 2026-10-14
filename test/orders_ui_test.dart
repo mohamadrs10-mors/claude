@@ -33,6 +33,7 @@ Future<Repo> seed(WidgetTester t) async {
 TextEditingController field(WidgetTester t, String label) => t.widget<TextFormField>(find.widgetWithText(TextFormField, label)).controller!;
 
 void main() {
+  flowTests();
   testWidgets('order form: advance follows qty x price x percent, saves into the cash box without crediting the customer', (tester) async {
     tester.view.physicalSize = const Size(1000, 2600);
     tester.view.devicePixelRatio = 1;
@@ -91,3 +92,42 @@ void main() {
 }
 
 Finder field2(WidgetTester t, String label) => find.widgetWithText(TextFormField, label);
+
+void flowTests() {
+  testWidgets('new invoice from the invoices page: choosing the customer offers the order and the advance is deducted', (tester) async {
+    tester.view.physicalSize = const Size(1000, 2600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final repo = await seed(tester);
+    await tester.runAsync(() async {
+      final party = (await repo.parties()).single;
+      final acc = (await repo.accounts()).single;
+      final prod = (await repo.products()).single;
+      await repo.saveOrder(number: 1, date: todayIso(), partyId: party.id, productId: prod.id, title: 'برنج', qty: 100, unitPrice: 1000, percent: 50, advance: 50000, accountId: acc.id);
+    });
+    await tester.pumpWidget(MaterialApp(home: Directionality(textDirection: TextDirection.rtl, child: InvoiceEditPage(repo: repo))));
+    await settle(tester);
+    expect(find.textContaining('سفارش دارای پیش‌دریافت'), findsNothing); // no customer chosen yet
+
+    await tester.tap(find.widgetWithText(DropdownButtonFormField<String?>, 'مشتری'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('مشتری').last);
+    await settle(tester);
+    expect(find.textContaining('سفارش دارای پیش‌دریافت'), findsOneWidget);
+
+    // The only open order is chosen automatically, no manual pick needed.
+    expect(find.text('مانده بدهی مشتری'), findsOneWidget);
+    // Pick the product the way a user does: type and choose from the suggestions.
+    await tester.enterText(find.widgetWithText(TextFormField, 'کالا / شرح'), 'برن');
+    await tester.pumpAndSettle();
+    await tester.tap(find.textContaining('موجودی').first);
+    await tester.pumpAndSettle();
+    await tester.enterText(find.widgetWithText(TextFormField, 'تعداد (کیسه)'), '40');
+    await tester.pump();
+    await tester.tap(find.text('ذخیره فاکتور'));
+    await settle(tester);
+    final inv = (await tester.runAsync(repo.invoices))!.single;
+    expect((inv.total, inv.prepaid, inv.remaining), (40000, 20000, 20000));
+    expect((await tester.runAsync(repo.parties))!.single.balance, 20000);
+  });
+}

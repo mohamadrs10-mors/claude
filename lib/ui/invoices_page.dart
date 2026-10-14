@@ -405,6 +405,9 @@ class _InvoiceEditPageState extends State<InvoiceEditPage> {
   }
 
   /// Open orders of the chosen customer, to take an advance payment from.
+  ///
+  /// For a new sale the order is chosen automatically when there is only one
+  /// open order with advance left, so the advance is never forgotten.
   Future<void> _loadOrders() async {
     final pid = partyId;
     final list = pid == null ? <Order>[] : (await repo.orders(partyId: pid)).where((o) => o.open || o.id == originalOrderId).toList();
@@ -412,6 +415,10 @@ class _InvoiceEditPageState extends State<InvoiceEditPage> {
     setState(() {
       orders = list;
       if (!list.any((o) => o.id == orderId)) orderId = null;
+      if (orderId == null && widget.invoiceId == null && kind == 'sale') {
+        final usable = list.where((o) => o.open && o.available > 0).toList();
+        if (usable.length == 1) orderId = usable.single.id;
+      }
     });
   }
 
@@ -454,6 +461,11 @@ class _InvoiceEditPageState extends State<InvoiceEditPage> {
     l.title.text = p.name;
     final price = kind.startsWith('purchase') ? p.buyPrice : p.salePrice;
     if (price > 0) l.price.text = money(price);
+    // With several open orders, the one for this product is used.
+    if (kind == 'sale' && orderId == null && widget.invoiceId == null) {
+      final match = orders.where((o) => o.open && o.available > 0 && o.productId == p.id).toList();
+      if (match.length == 1) orderId = match.single.id;
+    }
     setState(() {});
   }
 
@@ -476,6 +488,7 @@ class _InvoiceEditPageState extends State<InvoiceEditPage> {
                   final next = (v == 'proforma') != (kind == 'proforma') ? '${await repo.nextInvoiceNumber(v!)}' : null;
                   setState(() {
                     kind = v!;
+                    if (kind == 'sale') _loadOrders();
                     // Pro-formas have their own number series; follow it while the number is untouched.
                     if (next != null && widget.invoiceId == null && number.text == autoNumber) {
                       autoNumber = next;
@@ -536,7 +549,11 @@ class _InvoiceEditPageState extends State<InvoiceEditPage> {
                   key: ValueKey('ord$partyId${orders.length}'),
                   initialValue: orderId,
                   isExpanded: true,
-                  decoration: const InputDecoration(labelText: 'سفارش دارای پیش‌دریافت (اختیاری)'),
+                  decoration: InputDecoration(
+                    labelText: 'سفارش دارای پیش‌دریافت (اختیاری)',
+                    helperText: orderId == null ? 'این مشتری سفارش باز دارد؛ تا آن را انتخاب نکنید پیش‌دریافتش از این فاکتور کسر نمی‌شود.' : null,
+                    helperMaxLines: 2,
+                  ),
                   items: [
                     const DropdownMenuItem<String?>(value: null, child: Text('— بدون سفارش —')),
                     for (final o in orders)
