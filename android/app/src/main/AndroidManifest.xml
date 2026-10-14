@@ -4,7 +4,7 @@
     <!-- Sync talks plain HTTP to the other device on the local network. -->
     <application
         android:usesCleartextTraffic="true"
-        android:label="حسابداری ساده"
+        android:label="MORS ACC"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

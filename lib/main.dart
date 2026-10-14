@@ -59,7 +59,7 @@ class AccountingApp extends StatelessWidget {
   Widget build(BuildContext context) => ListenableBuilder(
         listenable: Listenable.merge([theme, companies, lock]),
         builder: (context, _) => MaterialApp(
-          title: 'حسابداری ساده',
+          title: 'MORS ACC',
           debugShowCheckedModeBanner: false,
           locale: const Locale('fa', 'IR'),
           supportedLocales: const [Locale('fa', 'IR')],

@@ -29,7 +29,7 @@ class PdfDocs {
     return pw.ThemeData.withFont(base: _regular!, bold: _bold!, fontFallback: [_regular!]);
   }
 
-  String get _business => repo.setting('business_name', 'حسابداری ساده');
+  String get _business => repo.setting('business_name', 'MORS ACC');
 
   /// The business logo from Settings, if there is a valid one.
   pw.MemoryImage? get _logo {
