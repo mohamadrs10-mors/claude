@@ -507,7 +507,18 @@ class Repo extends ChangeNotifier {
   }
 
   void changed() {
-    _loadSettings().whenComplete(notifyListeners);
+    refresh();
+  }
+
+  /// Reloads the settings and tells the screens to redraw (also when the data
+  /// changed somewhere else, e.g. on the server).
+  Future<void> refresh() async {
+    try {
+      await _loadSettings();
+    } catch (_) {
+      // Offline (network client): the screens still redraw with what they have.
+    }
+    notifyListeners();
   }
 
   // ---- accounts -----------------------------------------------------------

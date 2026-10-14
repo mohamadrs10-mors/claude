@@ -10,6 +10,8 @@ import 'package:shelf/shelf_io.dart' as shelf_io;
 import '../data/company_manager.dart';
 import '../data/db.dart';
 import '../data/repo.dart';
+import '../data/sessions.dart';
+import 'net_api.dart';
 
 const defaultSyncPort = 8765;
 const _codeHeader = 'x-pair-code';
@@ -37,9 +39,22 @@ class SyncException implements Exception {
 /// Several companies can live on one device, so every request names the
 /// company it is about; the server looks it up by id.
 class SyncService {
-  SyncService(this.companies);
+  SyncService(this.companies, {SessionManager? sessions}) : sessions = sessions ?? SessionManager() {
+    api = NetApi(
+      companies: companies,
+      sessions: this.sessions,
+      pairCode: pairCode,
+      enabled: () => companies.prefs.get('net_mode') == 'server',
+    );
+  }
 
   final CompanyManager companies;
+
+  /// Who is signed in on this server (network clients and the local user).
+  final SessionManager sessions;
+
+  /// The live network API for clients; only answers while this device is set up as a server.
+  late final NetApi api;
 
   HttpServer? _server;
   // Separate locks: if both devices sync to each other at the same moment the
@@ -78,6 +93,8 @@ class SyncService {
 
   Future<Response> _handle(Request req) async {
     try {
+      final net = await api.handle(req);
+      if (net != null) return net;
       if (req.method == 'GET' && req.url.path == 'ping') {
         return _json({'app': 'simple_accounting'});
       }

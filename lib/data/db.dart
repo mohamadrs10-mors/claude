@@ -5,6 +5,9 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:uuid/uuid.dart';
 
+import 'access.dart';
+import 'db_ops.dart';
+
 /// Tables that take part in synchronisation. Every one of them carries the
 /// common columns: id, updated_at, deleted, device_id and the local-only seq.
 const syncTables = [
@@ -26,7 +29,7 @@ const syncTables = [
   'product_groups',
 ];
 
-const _schemaVersion = 9;
+const _schemaVersion = 10;
 
 const _v2Tables = [
   '''CREATE TABLE products (
@@ -106,6 +109,16 @@ const _v7Tables = [
     unit_price INTEGER NOT NULL DEFAULT 0, position INTEGER NOT NULL DEFAULT 0)''',
   'CREATE INDEX idx_order_items_seq ON order_items(seq)',
   'CREATE INDEX idx_order_items_order ON order_items(order_id)',
+];
+
+/// Users and their roles (never synced, never exported: they hold the password
+/// hashes). Only the server-side code reads them, through [UserStore].
+const _v10Tables = [
+  '''CREATE TABLE roles (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, perms TEXT NOT NULL DEFAULT '[]', builtin INTEGER NOT NULL DEFAULT 0)''',
+  '''CREATE TABLE users (
+    id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE, full_name TEXT NOT NULL DEFAULT '', role_id TEXT NOT NULL,
+    salt TEXT NOT NULL, hash TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT '')''',
 ];
 
 /// Product groups (گروه کالایی): every product can belong to one group.
@@ -192,6 +205,7 @@ final _schema = [
   ..._v2Tables,
   ..._migrate7to8,
   ..._migrate8to9,
+  ..._v10Tables,
   ..._v3Tables,
   ..._v5Tables,
   ..._v6Tables,
@@ -237,10 +251,30 @@ Future<void> _orderItemsFromOrders(Database db) async {
 /// Thin wrapper around the SQLite database that stamps every write with the
 /// metadata needed for sync (updated_at, device_id and a local change counter).
 class AppDb {
-  AppDb._(this.db, this.deviceId);
+  AppDb._(this._raw, this.deviceId);
 
-  final Database db;
+  final Database _raw;
+  Database? _guarded;
   final String deviceId;
+
+  /// What the app's screens and [Repo] use. While a user with a limited role is
+  /// signed in on this device it refuses writes that role may not make.
+  Database get db => _guarded ?? _raw;
+
+  /// The unrestricted database: sync, backups, the server and [UserStore]
+  /// (which hold their own checks) use this one.
+  Database get raw => _raw;
+
+  /// Limits (or, with null, frees) what the screens may change on this device.
+  void setAccess(Access? access) {
+    _guarded = access == null || access.unrestricted ? null : GuardedDatabase(_raw, access);
+  }
+
+  /// Wraps an already open database, such as the network one of a client.
+  static Future<AppDb> wrap(Database db) async {
+    final rows = await db.query('meta', where: "key='device_id'");
+    return AppDb._(db, rows.first['value'] as String);
+  }
 
   static const _uuid = Uuid();
   static String newId() => _uuid.v4();
@@ -298,6 +332,11 @@ class AppDb {
               await db.execute(q);
             }
           }
+          if (from < 10) {
+            for (final q in _v10Tables) {
+              await db.execute(q);
+            }
+          }
         },
         onCreate: (db, _) async {
           for (final s in _schema) {
@@ -312,14 +351,14 @@ class AppDb {
     return AppDb._(db, rows.first['value'] as String);
   }
 
-  Future<void> close() => db.close();
+  Future<void> close() => _raw.close();
 
   Future<String?> getMeta(String key) async {
-    final r = await db.query('meta', where: 'key=?', whereArgs: [key]);
+    final r = await _raw.query('meta', where: 'key=?', whereArgs: [key]);
     return r.isEmpty ? null : r.first['value'] as String?;
   }
 
-  Future<void> setMeta(String key, String value) => db.insert(
+  Future<void> setMeta(String key, String value) => _raw.insert(
       'meta', {'key': key, 'value': value},
       conflictAlgorithm: ConflictAlgorithm.replace);
 
@@ -380,7 +419,7 @@ class AppDb {
   Future<Map<String, List<Map<String, Object?>>>> changesSince(int seq) async {
     final out = <String, List<Map<String, Object?>>>{};
     for (final t in syncTables) {
-      final rows = await db.query(t, where: 'seq>?', whereArgs: [seq]);
+      final rows = await _raw.query(t, where: 'seq>?', whereArgs: [seq]);
       out[t] = [
         for (final r in rows) {...r}..remove('seq'),
       ];
@@ -392,7 +431,7 @@ class AppDb {
   /// number of rows that actually changed the local database.
   Future<int> applyRemote(Map<String, dynamic> data) async {
     var applied = 0;
-    await db.transaction((tx) async {
+    await _raw.transaction((tx) async {
       for (final t in syncTables) {
         final list = (data[t] as List?) ?? const [];
         for (final raw in list) {

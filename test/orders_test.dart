@@ -206,6 +206,8 @@ void main() {
     await raw.execute('DROP TABLE order_items');
     await raw.execute('ALTER TABLE cheques DROP COLUMN order_id'); // added in version 8
     await raw.execute('DROP TABLE product_groups'); // version 9
+    await raw.execute('DROP TABLE users'); // version 10
+    await raw.execute('DROP TABLE roles');
     await raw.execute('ALTER TABLE products DROP COLUMN group_id');
     await raw.execute(
         "INSERT INTO cheques (id, updated_at, deleted, device_id, seq, kind, number, bank, amount, due_date, status)"

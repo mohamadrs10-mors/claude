@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:path/path.dart' as p;
 
@@ -30,6 +31,17 @@ class DevicePrefs {
   factory DevicePrefs.memory() => DevicePrefs._(null, {});
 
   String? get(String key) => _map[key];
+
+  /// A random id of this installation, made once; the server uses it to tell
+  /// two systems apart (one user may be signed in on one system only).
+  String get deviceUid {
+    var v = _map['device_uid'];
+    if (v == null || v.isEmpty) {
+      v = base64Url.encode(List.generate(12, (_) => Random.secure().nextInt(256)));
+      set('device_uid', v);
+    }
+    return v;
+  }
 
   Future<void> set(String key, String value) {
     _map[key] = value;
