@@ -25,7 +25,7 @@ const syncTables = [
   'order_items',
 ];
 
-const _schemaVersion = 7;
+const _schemaVersion = 8;
 
 const _v2Tables = [
   '''CREATE TABLE products (
@@ -107,6 +107,11 @@ const _v7Tables = [
   'CREATE INDEX idx_order_items_order ON order_items(order_id)',
 ];
 
+/// Upgrade 7 -> 8: a received cheque can be (part of) an order's advance.
+const _migrate7to8 = [
+  'ALTER TABLE cheques ADD COLUMN order_id TEXT',
+];
+
 /// Upgrade 5 -> 6: orders and the advance applied to each invoice.
 const _migrate5to6 = [
   'ALTER TABLE invoices ADD COLUMN order_id TEXT',
@@ -170,6 +175,7 @@ final _schema = [
     invoice_id TEXT NOT NULL, title TEXT NOT NULL, qty REAL NOT NULL,
     unit_price INTEGER NOT NULL, position INTEGER NOT NULL DEFAULT 0, product_id TEXT)''',
   ..._v2Tables,
+  ..._migrate7to8,
   ..._v3Tables,
   ..._v5Tables,
   ..._v6Tables,
@@ -265,6 +271,11 @@ class AppDb {
               await db.execute(q);
             }
             await _orderItemsFromOrders(db);
+          }
+          if (from < 8) {
+            for (final q in _migrate7to8) {
+              await db.execute(q);
+            }
           }
         },
         onCreate: (db, _) async {

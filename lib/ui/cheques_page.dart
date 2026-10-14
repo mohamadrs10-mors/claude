@@ -23,6 +23,7 @@ class ChequesPage extends StatefulWidget {
 
 class _ChequesPageState extends State<ChequesPage> with SingleTickerProviderStateMixin {
   late final TabController tabs = TabController(length: 2, vsync: this);
+  Map<String, int> _orderNo = {};
 
   @override
   void dispose() {
@@ -31,11 +32,16 @@ class _ChequesPageState extends State<ChequesPage> with SingleTickerProviderStat
   }
 
   @override
-  Widget build(BuildContext context) => RepoBuilder<(List<Cheque>, Map<String, String>)>(
+  Widget build(BuildContext context) => RepoBuilder<(List<Cheque>, Map<String, String>, Map<String, int>)>(
         repo: widget.repo,
-        load: () async => (await widget.repo.cheques(), {for (final p in await widget.repo.parties()) p.id: p.name}),
+        load: () async => (
+          await widget.repo.cheques(),
+          {for (final p in await widget.repo.parties()) p.id: p.name},
+          {for (final o in await widget.repo.orders()) o.id: o.number},
+        ),
         builder: (c, d) {
-          final (all, names) = d;
+          final (all, names, orderNo) = d;
+          _orderNo = orderNo;
           return Scaffold(
             body: Constrained(
               child: Column(children: [
@@ -87,6 +93,7 @@ class _ChequesPageState extends State<ChequesPage> with SingleTickerProviderStat
                   if (x.partyId != null) names[x.partyId] ?? '',
                   if (x.bank.isNotEmpty) x.bank,
                   if (x.number.isNotEmpty) 'شمارهٔ ${faDigits(x.number)}',
+                  if (x.orderId != null) 'پیش‌دریافت سفارش ${faDigits('${_orderNo[x.orderId] ?? ''}')}',
                 ].join(' • ')),
                 trailing: StatusChip(overdue ? 'سررسید گذشته' : _statusLabel[x.status]!,
                     overdue ? Theme.of(c).colorScheme.error : _statusColor(c, x.status)),
@@ -100,13 +107,15 @@ class _ChequesPageState extends State<ChequesPage> with SingleTickerProviderStat
   }
 }
 
-Future<void> editCheque(BuildContext context, Repo repo, {Cheque? cheque, String kind = 'received'}) async {
+/// [partyId] and [orderId] pre-fill a new cheque that is the advance of an order.
+Future<void> editCheque(BuildContext context, Repo repo, {Cheque? cheque, String kind = 'received', String? partyId, String? orderId}) async {
   final parties = await repo.parties();
   final accounts = await repo.accounts();
   if (!context.mounted) return;
   var k = cheque?.kind ?? kind;
   var due = cheque?.dueDate ?? todayIso();
-  String? party = cheque?.partyId;
+  String? party = cheque?.partyId ?? partyId;
+  final forOrder = (cheque?.orderId ?? orderId) != null;
   final amount = TextEditingController(text: cheque == null ? '' : '${cheque.amount}');
   final number = TextEditingController(text: cheque?.number);
   final bank = TextEditingController(text: cheque?.bank);
@@ -130,7 +139,7 @@ Future<void> editCheque(BuildContext context, Repo repo, {Cheque? cheque, String
                     ButtonSegment(value: 'issued', label: Text('پرداختی'), icon: Icon(Icons.north_east)),
                   ],
                   selected: {k},
-                  onSelectionChanged: cheque == null ? (s) => set(() => k = s.first) : null,
+                  onSelectionChanged: cheque == null && !forOrder ? (s) => set(() => k = s.first) : null,
                 ),
                 gap(),
                 AmountField(
@@ -147,8 +156,16 @@ Future<void> editCheque(BuildContext context, Repo repo, {Cheque? cheque, String
                     const DropdownMenuItem(value: null, child: Text('—')),
                     for (final p in parties) DropdownMenuItem(value: p.id, child: Text(p.name)),
                   ],
-                  onChanged: (v) => party = v,
+                  onChanged: forOrder ? null : (v) => party = v,
                 ),
+                if (forOrder)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Align(
+                      alignment: AlignmentDirectional.centerStart,
+                      child: Text('این چک بخشی از پیش‌دریافت یک سفارش است؛ با وصول آن مشتری بستانکار نمی‌شود.', style: Theme.of(dc).textTheme.bodySmall),
+                    ),
+                  ),
                 gap(),
                 Row(children: [
                   Expanded(child: TextFormField(controller: number, decoration: const InputDecoration(labelText: 'شمارهٔ چک'))),
@@ -223,6 +240,7 @@ Future<void> editCheque(BuildContext context, Repo repo, {Cheque? cheque, String
                 dueDate: due,
                 partyId: party,
                 note: note.text.trim(),
+                orderId: orderId,
               );
               if (dc.mounted) Navigator.pop(dc);
             },

@@ -5,6 +5,7 @@ import '../util/format.dart';
 import 'common.dart';
 import 'invoices_page.dart';
 import 'parties_page.dart';
+import 'cheques_page.dart';
 import 'products_page.dart';
 
 /// Orders with an advance payment: the customer orders a quantity of a
@@ -78,17 +79,18 @@ class OrderViewPage extends StatelessWidget {
   final String orderId;
 
   @override
-  Widget build(BuildContext context) => RepoBuilder<(Order?, Party?, List<Invoice>, Map<String, String>)>(
+  Widget build(BuildContext context) => RepoBuilder<(Order?, Party?, List<Invoice>, Map<String, String>, List<Cheque>)>(
         repo: repo,
         load: () async {
           final o = (await repo.orders()).where((x) => x.id == orderId).firstOrNull;
-          if (o == null) return (null, null, <Invoice>[], <String, String>{});
+          if (o == null) return (null, null, <Invoice>[], <String, String>{}, <Cheque>[]);
           final party = (await repo.parties()).where((p) => p.id == o.partyId).firstOrNull;
           final units = {for (final p in await repo.products()) p.id: p.unit};
-          return (o, party, (await repo.invoices()).where((i) => i.orderId == o.id).toList(), units);
+          return (o, party, (await repo.invoices()).where((i) => i.orderId == o.id).toList(), units,
+              (await repo.cheques()).where((x) => x.orderId == o.id).toList());
         },
         builder: (c, d) {
-          final (o, party, invoices, units) = d;
+          final (o, party, invoices, units, cheques) = d;
           if (o == null) return const Scaffold(body: Center(child: Text('این سفارش حذف شد.')));
           Widget row(String l, String v, {bool bold = false}) => Padding(
                 padding: const EdgeInsets.symmetric(vertical: 3),
@@ -160,6 +162,10 @@ class OrderViewPage extends StatelessWidget {
                     child: Column(children: [
                       row('درصد پیش‌دریافت', '${faDigits(qtyText(o.percent))}٪'),
                       row('پیش‌دریافت دریافت‌شده', moneyC(o.advance), bold: true),
+                      if (o.chequeAmount > 0) ...[
+                        row('  • نقدی', moneyC(o.cash)),
+                        row('  • چکی (برگشتی حساب نمی‌شود)', moneyC(o.chequeAmount)),
+                      ],
                       row('کسرشده روی فاکتورها', moneyC(o.applied)),
                       if (o.released > 0) row('تبدیل‌شده به اعتبار مشتری', moneyC(o.released)),
                       row('باقی‌ماندهٔ قابل کسر', moneyC(o.available), bold: true),
@@ -174,6 +180,12 @@ class OrderViewPage extends StatelessWidget {
                       icon: const Icon(Icons.receipt_long_outlined),
                       label: const Text('صدور فاکتور برای این سفارش'),
                     ),
+                  if (o.open)
+                    OutlinedButton.icon(
+                      onPressed: () => editCheque(c, repo, kind: 'received', partyId: o.partyId, orderId: o.id),
+                      icon: const Icon(Icons.edit_note),
+                      label: const Text('ثبت چک پیش‌دریافت'),
+                    ),
                   OutlinedButton.icon(
                     onPressed: () async {
                       final msg = o.open
@@ -187,6 +199,26 @@ class OrderViewPage extends StatelessWidget {
                     label: Text(o.open ? 'بستن سفارش' : 'بازکردن دوباره'),
                   ),
                 ]),
+                if (cheques.isNotEmpty) ...[
+                  const SizedBox(height: 16),
+                  Text('چک‌های پیش‌دریافت', style: Theme.of(c).textTheme.titleSmall),
+                  const SizedBox(height: 8),
+                  Card(
+                    child: Column(children: [
+                      for (final x in cheques)
+                        ListTile(
+                          dense: true,
+                          title: Text(moneyC(x.amount)),
+                          subtitle: Text('سررسید ${jalaliText(x.dueDate)}${x.number.isEmpty ? '' : ' • شمارهٔ ${faDigits(x.number)}'}${x.bank.isEmpty ? '' : ' • ${x.bank}'}'),
+                          trailing: StatusChip(
+                            switch (x.status) { 'cleared' => 'وصول شده', 'bounced' => 'برگشتی', _ => 'در انتظار' },
+                            switch (x.status) { 'cleared' => Colors.green.shade700, 'bounced' => Theme.of(c).colorScheme.error, _ => Colors.orange.shade800 },
+                          ),
+                          onTap: () => editCheque(c, repo, cheque: x),
+                        ),
+                    ]),
+                  ),
+                ],
                 const SizedBox(height: 16),
                 Text('فاکتورهای این سفارش', style: Theme.of(c).textTheme.titleSmall),
                 const SizedBox(height: 8),
@@ -240,6 +272,19 @@ class _OLine {
   }
 }
 
+/// A cheque entered together with a new order.
+class _CRow {
+  final amount = TextEditingController();
+  final number = TextEditingController();
+  final bank = TextEditingController();
+  String due = todayIso();
+  void dispose() {
+    amount.dispose();
+    number.dispose();
+    bank.dispose();
+  }
+}
+
 class _OrderEditPageState extends State<OrderEditPage> {
   final key = GlobalKey<FormState>();
   final number = TextEditingController();
@@ -247,6 +292,8 @@ class _OrderEditPageState extends State<OrderEditPage> {
   final advance = TextEditingController();
   final note = TextEditingController();
   final lines = <_OLine>[];
+  final chequeRows = <_CRow>[];
+  int _existingCheques = 0; // cheques of the order being edited
   List<Party> parties = [];
   List<Product> products = [];
   List<Account> accounts = [];
@@ -272,6 +319,10 @@ class _OrderEditPageState extends State<OrderEditPage> {
     }
     for (final l in lines) {
       _drop(l);
+    }
+    for (final r in chequeRows) {
+      r.amount.removeListener(_syncAdvance);
+      r.dispose();
     }
     super.dispose();
   }
@@ -299,10 +350,11 @@ class _OrderEditPageState extends State<OrderEditPage> {
       date = o.date;
       partyId = o.partyId;
       percent.text = qtyText(o.percent);
-      advance.text = money(o.advance);
       advanceTouched = true;
       accountId = o.accountId;
       note.text = o.note;
+      advance.text = money(o.cash);
+      _existingCheques = o.chequeAmount;
       for (final it in o.items) {
         lines.add(_newLine(t: it.title, q: qtyText(it.qty), p: money(it.unitPrice), productId: it.productId));
       }
@@ -316,11 +368,13 @@ class _OrderEditPageState extends State<OrderEditPage> {
 
   double get _pct => parseQty(percent.text).clamp(0, 100).toDouble();
   int get _total => lines.fold(0, (a, l) => a + l.total);
+  int get _chequeSum => chequeRows.fold(0, (a, r) => a + parseAmount(r.amount.text)) + _existingCheques;
 
-  /// The advance follows total x percent until it is typed by hand.
+  /// The cash part follows total x percent minus the cheques until it is typed by hand.
   void _syncAdvance() {
     if (advanceTouched || !loaded) return;
-    final v = (_total * _pct / 100).round();
+    final want = (_total * _pct / 100).round() - _chequeSum;
+    final v = want < 0 ? 0 : want;
     _autoText = v == 0 ? '' : money(v);
     advance.text = _autoText;
   }
@@ -345,6 +399,10 @@ class _OrderEditPageState extends State<OrderEditPage> {
         advance: parseAmount(advance.text),
         accountId: accountId,
         note: note.text.trim(),
+        cheques: [
+          for (final r in chequeRows)
+            ChequeDraft(amount: parseAmount(r.amount.text), dueDate: r.due, number: enDigits(r.number.text.trim()), bank: r.bank.text.trim()),
+        ],
       );
       if (mounted) Navigator.pop(context);
     } on StateError catch (e) {
@@ -452,8 +510,8 @@ class _OrderEditPageState extends State<OrderEditPage> {
                       },
                       child: AmountField(
                         controller: advance,
-                        label: 'مبلغ دریافت‌شده',
-                        helper: 'خودکار از درصد؛ اگر کمتر یا بیشتر گرفتید بنویسید',
+                        label: 'مبلغ نقدی دریافت‌شده',
+                        helper: 'خودکار از درصد (منهای چک‌ها)؛ اگر کمتر یا بیشتر گرفتید بنویسید',
                       ),
                     ),
                   ),
@@ -475,12 +533,75 @@ class _OrderEditPageState extends State<OrderEditPage> {
               ]),
             ),
             gap(16),
+            Section(
+              title: 'چک‌های پیش‌دریافت (اختیاری)',
+              child: widget.orderId != null
+                  ? Text(
+                      _existingCheques > 0
+                          ? 'چک‌های این سفارش (${moneyC(_existingCheques)}) را از صفحهٔ خود سفارش ببینید یا ویرایش کنید؛ چک تازه هم از همان‌جا ثبت می‌شود.'
+                          : 'چک پیش‌دریافت را از صفحهٔ خود سفارش («ثبت چک پیش‌دریافت») اضافه کنید.',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    )
+                  : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(
+                        'اگر بخشی از پیش‌دریافت یا همهٔ آن را چک گرفته‌اید، اینجا بنویسید. چک هم مثل نقد از همان لحظه روی فاکتورهای این سفارش کسر می‌شود (اگر برگشت بخورد کسر برگردانده می‌شود) و با وصول، پولش به حساب می‌نشیند.',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      gap(),
+                      for (var i = 0; i < chequeRows.length; i++) _chequeRow(i),
+                      TextButton.icon(
+                        onPressed: () => setState(() {
+                          final r = _CRow();
+                          r.amount.addListener(_syncAdvance);
+                          chequeRows.add(r);
+                        }),
+                        icon: const Icon(Icons.add),
+                        label: const Text('افزودن چک'),
+                      ),
+                    ]),
+            ),
+            gap(16),
             Section(title: 'توضیحات', child: TextFormField(controller: note, decoration: const InputDecoration(labelText: 'توضیحات'))),
             gap(20),
             FilledButton.icon(onPressed: _save, icon: const Icon(Icons.check), label: const Text('ذخیره سفارش')),
           ]),
         ),
       ),
+    );
+  }
+
+  Widget _chequeRow(int i) {
+    final r = chequeRows[i];
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Column(children: [
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Expanded(child: AmountField(controller: r.amount, label: 'مبلغ چک', validator: (v) => parseAmount(v ?? '') <= 0 ? 'مبلغ؟' : null)),
+          const SizedBox(width: 10),
+          Expanded(child: JalaliDateField(iso: r.due, label: 'تاریخ سررسید', onChanged: (v) => setState(() => r.due = v))),
+          IconButton(
+            tooltip: 'حذف چک',
+            onPressed: () => setState(() {
+              final x = chequeRows.removeAt(i);
+              x.amount.removeListener(_syncAdvance);
+              x.dispose();
+              _syncAdvance();
+            }),
+            icon: const Icon(Icons.close),
+          ),
+        ]),
+        const SizedBox(height: 10),
+        Row(children: [
+          Expanded(child: TextFormField(controller: r.number, decoration: const InputDecoration(labelText: 'شمارهٔ چک'))),
+          const SizedBox(width: 10),
+          Expanded(child: TextFormField(controller: r.bank, decoration: const InputDecoration(labelText: 'بانک'))),
+        ]),
+      ]),
     );
   }
 

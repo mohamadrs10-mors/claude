@@ -35,6 +35,7 @@ TextEditingController field(WidgetTester t, String label) => t.widget<TextFormFi
 void main() {
   flowTests();
   multiTests();
+  chequeTests();
   testWidgets('order form: advance follows qty x price x percent, saves into the cash box without crediting the customer', (tester) async {
     tester.view.physicalSize = const Size(1000, 2600);
     tester.view.devicePixelRatio = 1;
@@ -51,10 +52,10 @@ void main() {
     await tester.enterText(field2(tester, 'تعداد سفارش'), '100');
     await tester.enterText(field2(tester, 'قیمت واحد'), '1000');
     await tester.pump();
-    expect(parseAmount(field(tester, 'مبلغ دریافت‌شده').text), 50000);
+    expect(parseAmount(field(tester, 'مبلغ نقدی دریافت‌شده').text), 50000);
     await tester.enterText(field2(tester, 'درصد پیش‌دریافت'), '30');
     await tester.pump();
-    expect(parseAmount(field(tester, 'مبلغ دریافت‌شده').text), 30000);
+    expect(parseAmount(field(tester, 'مبلغ نقدی دریافت‌شده').text), 30000);
 
     await tester.tap(find.text('ذخیره سفارش'));
     await settle(tester);
@@ -94,6 +95,50 @@ void main() {
 
 Finder field2(WidgetTester t, String label) => find.widgetWithText(TextFormField, label);
 
+void chequeTests() {
+  testWidgets('order form: part of the advance as a cheque; the cash part shrinks and the order page lists the cheque', (tester) async {
+    tester.view.physicalSize = const Size(1000, 3600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final repo = await seed(tester);
+    await tester.pumpWidget(MaterialApp(home: Directionality(textDirection: TextDirection.rtl, child: OrderEditPage(repo: repo))));
+    await settle(tester);
+    await tester.tap(find.widgetWithText(DropdownButtonFormField<String?>, 'مشتری'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('مشتری').last);
+    await tester.pumpAndSettle();
+    await tester.enterText(find.widgetWithText(TextFormField, 'کالا'), 'برن');
+    await tester.pumpAndSettle();
+    await tester.tap(find.textContaining('موجودی').first);
+    await tester.pumpAndSettle();
+    await tester.enterText(find.widgetWithText(TextFormField, 'تعداد سفارش'), '100'); // 100 x 1000, 50% -> 50000
+    await tester.pump();
+    expect(parseAmount(field(tester, 'مبلغ نقدی دریافت‌شده').text), 50000);
+
+    await tester.tap(find.text('افزودن چک'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.widgetWithText(TextFormField, 'مبلغ چک'), '30000');
+    await tester.enterText(find.widgetWithText(TextFormField, 'شمارهٔ چک'), '555');
+    await tester.pump();
+    expect(parseAmount(field(tester, 'مبلغ نقدی دریافت‌شده').text), 20000);
+
+    await tester.tap(find.text('ذخیره سفارش'));
+    await settle(tester);
+    final o = (await tester.runAsync(repo.orders))!.single;
+    expect((o.cash, o.chequeAmount, o.advance), (20000, 30000, 50000));
+    final chq = (await tester.runAsync(repo.cheques))!.single;
+    expect((chq.number, chq.orderId, chq.amount), ('555', o.id, 30000));
+    expect((await tester.runAsync(repo.accounts))!.single.balance, 20000);
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpWidget(MaterialApp(home: Directionality(textDirection: TextDirection.rtl, child: OrderViewPage(repo: repo, orderId: o.id))));
+    await settle(tester);
+    expect(find.text('چک‌های پیش‌دریافت'), findsOneWidget);
+    expect(find.text('ثبت چک پیش‌دریافت'), findsOneWidget);
+    expect(find.text('در انتظار'), findsOneWidget);
+  });
+}
+
 void multiTests() {
   testWidgets('order with two products via the form; its invoice is pre-filled with both and takes the advance', (tester) async {
     tester.view.physicalSize = const Size(1000, 3200);
@@ -123,7 +168,7 @@ void multiTests() {
     await pickProduct(1, 'روغ');
     await tester.enterText(find.widgetWithText(TextFormField, 'تعداد سفارش').at(1), '50');
     await tester.pump();
-    expect(parseAmount(field(tester, 'مبلغ دریافت‌شده').text), 100000); // 50% of 100x1000 + 50x2000
+    expect(parseAmount(field(tester, 'مبلغ نقدی دریافت‌شده').text), 100000); // 50% of 100x1000 + 50x2000
 
     await tester.tap(find.text('ذخیره سفارش'));
     await settle(tester);

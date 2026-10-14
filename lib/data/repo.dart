@@ -83,10 +83,14 @@ class Cheque {
     this.accountId,
     this.txId,
     this.note = '',
+    this.orderId,
   });
   final String id, kind, number, bank, dueDate, status, note; // kind: received | issued
   final int amount;
   final String? partyId, accountId, txId;
+
+  /// The order whose advance payment this cheque is (all or part of).
+  final String? orderId;
 }
 
 class InvoiceItem {
@@ -114,6 +118,14 @@ class DeliveryItem {
   final String? productId;
 }
 
+/// A cheque received from the customer as (part of) an order's advance,
+/// created together with the order.
+class ChequeDraft {
+  ChequeDraft({required this.amount, required this.dueDate, this.number = '', this.bank = ''});
+  final int amount;
+  final String dueDate, number, bank;
+}
+
 /// One product of an order with the quantity and unit price agreed.
 class OrderItem {
   OrderItem(this.title, this.qty, this.unitPrice, {this.productId, this.invoicedQty = 0});
@@ -137,17 +149,20 @@ class Order {
   Order({
     required this.id, required this.number, required this.date, required this.partyId,
     required this.title, required this.items, required this.percent,
-    required this.advance, this.accountId, this.txId, required this.status, required this.released,
+    required this.cash, this.chequeAmount = 0, this.accountId, this.txId, required this.status, required this.released,
     required this.closedDate, required this.note, required this.applied,
   });
   final String id, date, partyId, title, status, closedDate, note;
   final String? accountId, txId;
-  final int number, advance, released, applied;
+  final int number, cash, chequeAmount, released, applied;
   final double percent;
   final List<OrderItem> items;
 
   bool get open => status == 'open';
   int get total => items.fold(0, (a, i) => a + i.total);
+
+  /// Everything received as advance: cash plus cheques that did not bounce.
+  int get advance => cash + chequeAmount;
 
   /// Share of the order's value already invoiced, 0..1.
   double get progress {
@@ -733,7 +748,8 @@ class Repo extends ChangeNotifier {
           final others = (await tx.rawQuery(
                   'SELECT COALESCE(SUM(prepaid),0) AS n FROM invoices WHERE order_id=? AND deleted=0 AND id<>?', [linked, invId]))
               .first['n'] as num;
-          final left = (o['advance_amount'] as int) - (o['released'] as int) - others.round();
+          final chq = await _orderCheques(tx, linked);
+          final left = (o['advance_amount'] as int) + chq - (o['released'] as int) - others.round();
           final oi = await _orderItemsOf(tx, linked);
           prepaid = prepaidFor(total, (o['advance_percent'] as num).toDouble(), left, share: orderShare(oi, items));
         }
@@ -802,10 +818,44 @@ class Repo extends ChangeNotifier {
     ];
   }
 
+  /// Cheques received for the order that have not bounced.
+  Future<int> _orderCheques(DatabaseExecutor ex, String orderId) async {
+    final r = await ex.rawQuery(
+        "SELECT COALESCE(SUM(amount),0) AS n FROM cheques WHERE order_id=? AND deleted=0 AND status<>'bounced'", [orderId]);
+    return (r.first['n'] as num).round();
+  }
+
+  /// Keeps an order consistent after one of its cheques changed (bounced,
+  /// deleted, smaller...). If less advance is left than invoices already took
+  /// from it, the credit given to the customer on closing is taken back first,
+  /// then the newest invoices lose their prepaid part, so the customer owes it.
+  Future<void> _rebalanceOrder(DatabaseExecutor ex, String orderId) async {
+    final o = (await ex.query('orders', where: 'id=? AND deleted=0', whereArgs: [orderId])).firstOrNull;
+    if (o == null) return;
+    final eff = (o['advance_amount'] as int) + await _orderCheques(ex, orderId);
+    final invs = await ex.query('invoices',
+        where: 'order_id=? AND deleted=0 AND prepaid>0', whereArgs: [orderId], orderBy: 'date DESC, number DESC');
+    final applied = invs.fold<int>(0, (a, i) => a + (i['prepaid'] as int));
+    var released = o['released'] as int;
+    var over = applied + released - eff;
+    if (over <= 0) return;
+    final cutReleased = released < over ? released : over;
+    released -= cutReleased;
+    over -= cutReleased;
+    for (final inv in invs) {
+      if (over <= 0) break;
+      final cut = (inv['prepaid'] as int) < over ? inv['prepaid'] as int : over;
+      await store.save('invoices', {...inv, 'prepaid': (inv['prepaid'] as int) - cut}, exec: ex);
+      over -= cut;
+    }
+    if (cutReleased > 0) await store.save('orders', {...o, 'released': released}, exec: ex);
+  }
+
   Future<List<Order>> orders({String? partyId}) async {
     final rows = await store.db.rawQuery('''
       SELECT o.*,
-        COALESCE((SELECT SUM(i.prepaid) FROM invoices i WHERE i.order_id=o.id AND i.deleted=0),0) AS applied
+        COALESCE((SELECT SUM(i.prepaid) FROM invoices i WHERE i.order_id=o.id AND i.deleted=0),0) AS applied,
+        COALESCE((SELECT SUM(c.amount) FROM cheques c WHERE c.order_id=o.id AND c.deleted=0 AND c.status<>'bounced'),0) AS chq
       FROM orders o WHERE o.deleted=0 ${partyId == null ? '' : 'AND o.party_id=?'}
       ORDER BY o.date DESC, o.number DESC''', partyId == null ? null : [partyId]);
     final itemRows = await store.db.rawQuery('''
@@ -826,7 +876,7 @@ class Repo extends ChangeNotifier {
         Order(
           id: r['id'] as String, number: r['number'] as int, date: r['date'] as String, partyId: r['party_id'] as String,
           title: r['title'] as String, items: byOrder[r['id']] ?? [], percent: (r['advance_percent'] as num).toDouble(),
-          advance: r['advance_amount'] as int, accountId: r['account_id'] as String?, txId: r['tx_id'] as String?,
+          cash: r['advance_amount'] as int, chequeAmount: (r['chq'] as num).round(), accountId: r['account_id'] as String?, txId: r['tx_id'] as String?,
           status: r['status'] as String, released: r['released'] as int, closedDate: r['closed_date'] as String,
           note: r['note'] as String, applied: (r['applied'] as num).round(),
         )
@@ -851,6 +901,7 @@ class Repo extends ChangeNotifier {
     required int advance,
     String? accountId,
     String note = '',
+    List<ChequeDraft> cheques = const [],
   }) async {
     if (items.isEmpty) throw StateError('حداقل یک کالا برای سفارش لازم است.');
     if (advance > 0 && accountId == null) throw StateError('حساب دریافت پیش‌دریافت را انتخاب کنید.');
@@ -861,8 +912,9 @@ class Repo extends ChangeNotifier {
           ? 0
           : ((await tx.rawQuery('SELECT COALESCE(SUM(prepaid),0) AS n FROM invoices WHERE order_id=? AND deleted=0', [id])).first['n'] as num).round();
       final released = (old?['released'] as int?) ?? 0;
-      if (advance < applied + released) {
-        throw StateError('مبلغ پیش‌دریافت نمی‌تواند از مقدار کسرشده روی فاکتورها (${money(applied + released)}) کمتر باشد.');
+      final chequeSum = id == null ? 0 : await _orderCheques(tx, id);
+      if (advance + chequeSum < applied + released) {
+        throw StateError('جمع پیش‌دریافت (نقدی و چکی) نمی‌تواند از مقدار کسرشده روی فاکتورها (${money(applied + released)}) کمتر باشد.');
       }
       final partyName = (await tx.query('parties', columns: ['name'], where: 'id=?', whereArgs: [partyId])).firstOrNull?['name'] ?? '';
       var txId = old?['tx_id'] as String?;
@@ -892,6 +944,13 @@ class Repo extends ChangeNotifier {
         await store.save('order_items', {
           'order_id': oid, 'product_id': items[i].productId, 'title': items[i].title, 'qty': items[i].qty,
           'unit_price': items[i].unitPrice, 'position': i,
+        }, exec: tx);
+      }
+      // Part (or all) of the advance can come as cheques received from the customer.
+      for (final d in cheques.where((d) => d.amount > 0)) {
+        await store.save('cheques', {
+          'kind': 'received', 'number': d.number, 'bank': d.bank, 'amount': d.amount, 'due_date': d.dueDate,
+          'party_id': partyId, 'status': 'pending', 'note': 'پیش‌دریافت سفارش ${faDigits('$number')}', 'order_id': oid,
         }, exec: tx);
       }
     });
@@ -1074,6 +1133,7 @@ class Repo extends ChangeNotifier {
           bank: r['bank'] as String, amount: r['amount'] as int, dueDate: r['due_date'] as String,
           partyId: r['party_id'] as String?, status: r['status'] as String,
           accountId: r['account_id'] as String?, txId: r['tx_id'] as String?, note: r['note'] as String,
+          orderId: r['order_id'] as String?,
         )
     ];
   }
@@ -1087,19 +1147,22 @@ class Repo extends ChangeNotifier {
     required String dueDate,
     String? partyId,
     String note = '',
+    String? orderId,
   }) async {
-    // Editing keeps the status/transaction link of an existing cheque.
+    // Editing keeps the status/transaction/order link of an existing cheque.
     Map<String, Object?> keep = {};
     if (id != null) {
       final old = await store.db.query('cheques', where: 'id=?', whereArgs: [id]);
       if (old.isNotEmpty) {
-        keep = {'status': old.first['status'], 'account_id': old.first['account_id'], 'tx_id': old.first['tx_id']};
+        keep = {'status': old.first['status'], 'account_id': old.first['account_id'], 'tx_id': old.first['tx_id'], 'order_id': old.first['order_id']};
       }
     }
+    final linked = (keep['order_id'] as String?) ?? orderId;
     await store.save('cheques', {
       'id': ?id, 'kind': kind, 'number': number, 'bank': bank, 'amount': amount,
-      'due_date': dueDate, 'party_id': partyId, 'note': note, ...keep,
+      'due_date': dueDate, 'party_id': partyId, 'note': note, ...keep, 'order_id': linked,
     });
+    if (linked != null) await _rebalanceOrder(store.db, linked);
     changed();
   }
 
@@ -1117,21 +1180,24 @@ class Repo extends ChangeNotifier {
         kind: c.kind == 'received' ? 'receipt' : 'payment',
         amount: c.amount,
         accountId: accountId!,
-        partyId: c.partyId,
-        description: 'وصول چک ${c.number}'.trim(),
+        // The cash of an advance cheque must not credit the customer: the advance is already counted on the order.
+        partyId: c.orderId != null ? null : c.partyId,
+        description: c.orderId != null ? 'وصول چک پیش‌دریافت ${c.number}'.trim() : 'وصول چک ${c.number}'.trim(),
       );
     }
     await store.save('cheques', {
       'id': c.id, 'kind': c.kind, 'number': c.number, 'bank': c.bank, 'amount': c.amount,
       'due_date': c.dueDate, 'party_id': c.partyId, 'note': c.note,
-      'status': status, 'account_id': status == 'cleared' ? accountId : null, 'tx_id': txId,
+      'status': status, 'account_id': status == 'cleared' ? accountId : null, 'tx_id': txId, 'order_id': c.orderId,
     });
+    if (c.orderId != null) await _rebalanceOrder(store.db, c.orderId!);
     changed();
   }
 
   Future<void> deleteCheque(Cheque c) async {
     if (c.txId != null) await store.softDelete('transactions', c.txId!);
     await store.softDelete('cheques', c.id);
+    if (c.orderId != null) await _rebalanceOrder(store.db, c.orderId!);
     changed();
   }
 

@@ -204,6 +204,10 @@ void main() {
     await first.close();
     final raw = await databaseFactoryFfi.openDatabase(path);
     await raw.execute('DROP TABLE order_items');
+    await raw.execute('ALTER TABLE cheques DROP COLUMN order_id'); // added in version 8
+    await raw.execute(
+        "INSERT INTO cheques (id, updated_at, deleted, device_id, seq, kind, number, bank, amount, due_date, status)"
+        " VALUES ('c1', 1000, 0, 'dev', 4, 'received', '9', 'ملت', 7000, '2025-05-01', 'pending')");
     await raw.execute(
         "INSERT INTO orders (id, updated_at, deleted, device_id, seq, number, date, party_id, product_id, title, qty, unit_price, advance_percent, advance_amount, status)"
         " VALUES ('o1', 1000, 0, 'dev', 5, 1, '2025-03-01', 'p1', 'prod1', 'برنج', 100, 1000, 50, 50000, 'open')");
@@ -217,8 +221,102 @@ void main() {
     expect(o.items.length, 1);
     expect((o.items.single.title, o.items.single.qty, o.items.single.unitPrice, o.items.single.productId), ('برنج', 100.0, 1000, 'prod1'));
     expect(o.total, 100000);
+    final old = (await r.cheques()).single; // existing cheques survive and are not tied to an order
+    expect((old.amount, old.orderId), (7000, null));
     // The new row is picked up by sync (its seq is after the old counter) and has a stable id.
     final rows = (await r.store.changesSince(5))['order_items']!;
     expect(rows.single['id'], 'o1:0');
+  });
+
+  test('advance partly by cheque: counts on invoices at once, cash only when it clears, customer never credited', () async {
+    final (r, p, acc, prod) = await setup();
+    // Order 100000, 50% advance = 50000: 20000 cash + a 30000 cheque.
+    final oid = await r.saveOrder(
+        number: 1, date: '2025-03-01', partyId: p.id, percent: 50, advance: 20000, accountId: acc.id,
+        items: [OrderItem('برنج', 100, 1000, productId: prod.id)],
+        cheques: [ChequeDraft(amount: 30000, dueDate: '2025-05-01', number: '123', bank: 'ملی')]);
+    var o = (await r.orders()).single;
+    expect((o.cash, o.chequeAmount, o.advance, o.available), (20000, 30000, 50000, 50000));
+    final chq = (await r.cheques()).single;
+    expect((chq.kind, chq.status, chq.orderId, chq.partyId), ('received', 'pending', oid, p.id));
+    expect((await r.accounts()).single.balance, 20000); // only the cash is in the box
+    expect((await r.parties()).single.balance, 0);
+    var f = await r.financialPosition();
+    expect((f.cash, f.chequesReceived, f.advances), (20000, 30000, 50000));
+
+    // The cheque already counts on the invoice (customer paid with it).
+    await sale(r, p, prod, 1, 40, orderId: oid);
+    expect((await r.invoices()).single.prepaid, 20000);
+    expect((await r.parties()).single.balance, 20000);
+
+    // Clearing books cash without a party: the customer is not credited a second time.
+    await r.setChequeStatus(chq, 'cleared', accountId: acc.id);
+    expect((await r.accounts()).single.balance, 50000);
+    expect((await r.parties()).single.balance, 20000);
+    expect((await r.transactions()).where((t) => t.partyId == p.id), isEmpty);
+    f = await r.financialPosition();
+    expect((f.cash, f.chequesReceived, f.advances), (50000, 0, 30000));
+  });
+
+  test('advance fully by cheque needs no account; a bounced cheque takes the advance back from the invoices', () async {
+    final (r, p, _, prod) = await setup();
+    final oid = await r.saveOrder(
+        number: 1, date: '2025-03-01', partyId: p.id, percent: 50, advance: 0,
+        items: [OrderItem('برنج', 100, 1000, productId: prod.id)],
+        cheques: [ChequeDraft(amount: 50000, dueDate: '2025-05-01')]);
+    expect((await r.transactions()), isEmpty);
+    expect((await r.orders()).single.advance, 50000);
+    // 100000 invoice -> 50000 from the cheque advance; customer owes 50000.
+    await sale(r, p, prod, 1, 100, orderId: oid);
+    expect((await r.invoices()).single.prepaid, 50000);
+    expect((await r.parties()).single.balance, 50000);
+
+    // The cheque bounces: the advance never arrived, the whole invoice is owed.
+    await r.setChequeStatus((await r.cheques()).single, 'bounced');
+    expect((await r.orders()).single.advance, 0);
+    expect((await r.invoices()).single.prepaid, 0);
+    expect((await r.parties()).single.balance, 100000);
+    expect((await r.financialPosition()).advances, 0);
+
+    // Back to pending: the advance is there again for new invoices (old ones are not changed behind your back).
+    await r.setChequeStatus((await r.cheques()).single, 'pending');
+    expect((await r.orders()).single.advance, 50000);
+    expect((await r.invoices()).single.prepaid, 0);
+  });
+
+  test('bounce after closing the order takes back the credit first; deleting a cheque rebalances too', () async {
+    final (r, p, acc, prod) = await setup();
+    final oid = await r.saveOrder(
+        number: 1, date: '2025-03-01', partyId: p.id, percent: 50, advance: 10000, accountId: acc.id,
+        items: [OrderItem('برنج', 100, 1000, productId: prod.id)],
+        cheques: [ChequeDraft(amount: 40000, dueDate: '2025-05-01')]);
+    await sale(r, p, prod, 1, 40, orderId: oid); // prepaid 20000 of 50000
+    await r.setOrderOpen(oid, false); // 30000 left becomes customer credit
+    expect((await r.parties()).single.balance, 20000 - 30000);
+    await r.setChequeStatus((await r.cheques()).single, 'bounced'); // advance is now only the 10000 cash
+    final o = (await r.orders()).single;
+    expect((o.advance, o.released, o.applied), (10000, 0, 10000)); // credit gone, invoice keeps only what is really there
+    expect((await r.parties()).single.balance, 40000 - 10000);
+
+    // Deleting a cheque of another order behaves the same.
+    final oid2 = await r.saveOrder(
+        number: 2, date: '2025-03-02', partyId: p.id, percent: 50, advance: 0,
+        items: [OrderItem('برنج', 10, 1000, productId: prod.id)], cheques: [ChequeDraft(amount: 5000, dueDate: '2025-05-01')]);
+    await sale(r, p, prod, 2, 10, orderId: oid2);
+    expect((await r.invoices()).firstWhere((i) => i.orderId == oid2).prepaid, 5000);
+    await r.deleteCheque((await r.cheques()).firstWhere((c) => c.orderId == oid2));
+    expect((await r.invoices()).firstWhere((i) => i.orderId == oid2).prepaid, 0);
+  });
+
+  test('order cheques sync and survive a restore', () async {
+    final (a, p, acc, prod) = await setup();
+    final b = await newRepo();
+    await a.saveOrder(
+        number: 1, date: '2025-03-01', partyId: p.id, percent: 50, advance: 0,
+        items: [OrderItem('برنج', 10, 1000, productId: prod.id)], cheques: [ChequeDraft(amount: 5000, dueDate: '2025-05-01')]);
+    await b.store.applyRemote(await a.store.changesSince(0));
+    expect((await b.cheques()).single.orderId, (await a.orders()).single.id);
+    expect((await b.orders()).single.advance, 5000);
+    expect(acc.id, isNotEmpty);
   });
 }
