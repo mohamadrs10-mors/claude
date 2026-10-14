@@ -260,6 +260,7 @@ ReportDoc financialPositionDoc(FinancialPosition f) => ReportDoc(
           rows: [
             ['بدهی به اشخاص', money(f.payables)],
             ['چک‌های پرداختی در انتظار', money(f.chequesIssued)],
+            if (f.advances > 0) ['پیش‌دریافت از مشتریان (هنوز روی فاکتور نرفته)', money(f.advances)],
             for (final (n, v) in f.accounts.where((a) => a.$2 < 0)) ['برداشت بیش از موجودی $n', money(-v)],
           ],
           totals: ['جمع بدهی‌ها', money(f.liabilities)],

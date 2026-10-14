@@ -113,6 +113,29 @@ class DeliveryItem {
   final String? productId;
 }
 
+/// An order for one product with an advance payment (سفارش و پیش‌دریافت). The
+/// advance is cash received without crediting the customer; each sale invoice
+/// made for the order counts [percent] of its total as paid from the advance.
+class Order {
+  Order({
+    required this.id, required this.number, required this.date, required this.partyId, this.productId,
+    required this.title, required this.qty, required this.unitPrice, required this.percent,
+    required this.advance, this.accountId, this.txId, required this.status, required this.released,
+    required this.closedDate, required this.note, required this.applied, required this.invoicedQty,
+  });
+  final String id, date, partyId, title, status, closedDate, note;
+  final String? productId, accountId, txId;
+  final int number, unitPrice, advance, released, applied;
+  final double qty, percent, invoicedQty;
+
+  bool get open => status == 'open';
+  int get total => (qty * unitPrice).round();
+
+  /// Advance not yet counted on an invoice or released to the customer.
+  int get available => (advance - applied - released).clamp(0, advance);
+  double get remainingQty => qty - invoicedQty;
+}
+
 /// The four kinds of invoice and how each one affects the party balance and
 /// the stock.
 class InvoiceKind {
@@ -145,8 +168,14 @@ InvoiceKind invoiceKind(String code) =>
 
 class Invoice {
   Invoice(this.id, this.number, this.kind, this.date, this.partyId, this.discount,
-      this.note, this.subtotal, this.paid, this.taxPercent, [this.refId]);
+      this.note, this.subtotal, this.paid, this.taxPercent, [this.refId, this.orderId, this.prepaid = 0]);
   final String id, kind, date, partyId, note;
+
+  /// The order (with an advance payment) this sale invoice was made for.
+  final String? orderId;
+
+  /// Part of [total] that counts as already paid out of the order's advance.
+  final int prepaid;
 
   /// For a pro-forma: the invoice it was turned into.
   final String? refId;
@@ -154,7 +183,7 @@ class Invoice {
   int get net => subtotal - discount;
   int get tax => (net * taxPercent / 100).round();
   int get total => net + tax;
-  int get remaining => total - paid;
+  int get remaining => total - paid - prepaid;
   InvoiceKind get info => invoiceKind(kind);
 }
 
@@ -277,16 +306,20 @@ class FinancialPosition {
     required this.chequesReceived,
     required this.payables,
     required this.chequesIssued,
+    this.advances = 0,
   });
 
   /// (name, balance) of every account (negative balances count as liabilities).
   final List<(String, int)> accounts;
   final int receivables, inventory, chequesReceived, payables, chequesIssued;
 
+  /// Advance payments received from customers and not yet counted on an invoice.
+  final int advances;
+
   int get cash => accounts.where((a) => a.$2 > 0).fold(0, (s, a) => s + a.$2);
   int get overdrafts => accounts.where((a) => a.$2 < 0).fold(0, (s, a) => s - a.$2);
   int get assets => cash + receivables + inventory + chequesReceived;
-  int get liabilities => payables + chequesIssued + overdrafts;
+  int get liabilities => payables + chequesIssued + overdrafts + advances;
   int get equity => assets - liabilities;
 }
 
@@ -420,12 +453,12 @@ class Repo extends ChangeNotifier {
 
   static const _invoiceTotals = '''
     WITH inv AS (
-      SELECT i.party_id, i.kind, i.discount, i.tax_percent,
+      SELECT i.party_id, i.kind, i.discount, i.tax_percent, i.prepaid,
         COALESCE((SELECT SUM(ROUND(it.qty*it.unit_price)) FROM invoice_items it
           WHERE it.invoice_id=i.id AND it.deleted=0),0) AS sub
       FROM invoices i WHERE i.deleted=0),
     tot AS (
-      SELECT party_id, kind, (sub-discount) + ROUND((sub-discount)*tax_percent/100.0) AS total FROM inv
+      SELECT party_id, kind, (sub-discount) + ROUND((sub-discount)*tax_percent/100.0) - prepaid AS total FROM inv
       WHERE kind<>'proforma')''';
 
   Future<List<Party>> parties() async {
@@ -435,6 +468,7 @@ class Repo extends ChangeNotifier {
         p.opening
         + COALESCE((SELECT SUM(total * CASE WHEN kind IN ('sale','purchase_return') THEN 1 ELSE -1 END)
           FROM tot WHERE tot.party_id=p.id),0)
+        - COALESCE((SELECT SUM(o.released) FROM orders o WHERE o.party_id=p.id AND o.deleted=0),0)
         + COALESCE((SELECT SUM(CASE t.kind WHEN 'payment' THEN t.amount ELSE -t.amount END)
           FROM transactions t WHERE t.party_id=p.id AND t.deleted=0 AND t.kind IN ('receipt','payment')),0) AS balance
       FROM parties p WHERE p.deleted=0 ORDER BY p.name''');
@@ -598,7 +632,8 @@ class Repo extends ChangeNotifier {
       for (final r in rows)
         Invoice(r['id'] as String, r['number'] as int, r['kind'] as String, r['date'] as String,
             r['party_id'] as String, r['discount'] as int, r['note'] as String,
-            (r['subtotal'] as num).round(), (r['paid'] as num).round(), r['tax_percent'] as int, r['ref_id'] as String?)
+            (r['subtotal'] as num).round(), (r['paid'] as num).round(), r['tax_percent'] as int, r['ref_id'] as String?,
+            r['order_id'] as String?, r['prepaid'] as int)
     ];
   }
 
@@ -656,14 +691,32 @@ class Repo extends ChangeNotifier {
     int taxPercent = 0,
     required String note,
     required List<InvoiceItem> items,
+    String? orderId,
   }) async {
     final invId = id ?? AppDb.newId();
     await store.db.transaction((tx) async {
       // Editing keeps the link between a pro-forma and the invoice made from it.
       final keepRef = id == null ? null : (await tx.query('invoices', columns: ['ref_id'], where: 'id=?', whereArgs: [id])).firstOrNull?['ref_id'];
+      // A sale made for an order counts the agreed percent of its total as paid
+      // from the advance, never more than what is left of that advance.
+      var prepaid = 0;
+      final linked = kind == 'sale' ? orderId : null;
+      if (linked != null) {
+        final o = (await tx.query('orders', where: 'id=? AND deleted=0', whereArgs: [linked])).firstOrNull;
+        if (o != null) {
+          final net = items.fold<int>(0, (a, it) => a + it.total) - discount;
+          final total = net + (net * taxPercent / 100).round();
+          final others = (await tx.rawQuery(
+                  'SELECT COALESCE(SUM(prepaid),0) AS n FROM invoices WHERE order_id=? AND deleted=0 AND id<>?', [linked, invId]))
+              .first['n'] as num;
+          final left = (o['advance_amount'] as int) - (o['released'] as int) - others.round();
+          prepaid = prepaidFor(total, (o['advance_percent'] as num).toDouble(), left);
+        }
+      }
       await store.save('invoices', {
         'id': invId, 'number': number, 'kind': kind, 'date': date,
         'party_id': partyId, 'discount': discount, 'tax_percent': taxPercent, 'note': note, 'ref_id': keepRef,
+        'order_id': linked, 'prepaid': prepaid,
       }, exec: tx);
       final old = await tx.query('invoice_items',
           columns: ['id'], where: 'invoice_id=? AND deleted=0', whereArgs: [invId]);
@@ -679,6 +732,25 @@ class Repo extends ChangeNotifier {
     });
     changed();
     return invId;
+  }
+
+  /// The part of an invoice [total] paid from an advance: [percent] of it, capped by [left].
+  static int prepaidFor(int total, double percent, int left) {
+    final want = (total * percent / 100).round();
+    return want.clamp(0, left < 0 ? 0 : left);
+  }
+
+  /// Preview used by the invoice editor: what [total] would take from the
+  /// advance of [orderId] (other invoices of the order already counted).
+  Future<int> prepaidPreview(String orderId, int total, {String? exceptInvoiceId}) async {
+    final o = (await orders()).where((x) => x.id == orderId).firstOrNull;
+    if (o == null) return 0;
+    var left = o.available;
+    if (exceptInvoiceId != null) {
+      final mine = (await invoices()).where((i) => i.id == exceptInvoiceId && i.orderId == orderId).firstOrNull;
+      if (mine != null) left += mine.prepaid;
+    }
+    return o.open || exceptInvoiceId != null ? prepaidFor(total, o.percent, left) : 0;
   }
 
   Future<void> deleteInvoice(String id) async {
@@ -697,6 +769,112 @@ class Repo extends ChangeNotifier {
       }
     });
     changed();
+  }
+
+  // ---- orders with an advance payment ---------------------------------------
+
+  Future<List<Order>> orders({String? partyId}) async {
+    final rows = await store.db.rawQuery('''
+      SELECT o.*,
+        COALESCE((SELECT SUM(i.prepaid) FROM invoices i WHERE i.order_id=o.id AND i.deleted=0),0) AS applied,
+        COALESCE((SELECT SUM(it.qty) FROM invoice_items it JOIN invoices i ON i.id=it.invoice_id
+          WHERE i.order_id=o.id AND i.deleted=0 AND it.deleted=0
+            AND ((o.product_id IS NOT NULL AND it.product_id=o.product_id) OR (o.product_id IS NULL AND it.title=o.title))),0) AS invoiced
+      FROM orders o WHERE o.deleted=0 ${partyId == null ? '' : 'AND o.party_id=?'}
+      ORDER BY o.date DESC, o.number DESC''', partyId == null ? null : [partyId]);
+    return [
+      for (final r in rows)
+        Order(
+          id: r['id'] as String, number: r['number'] as int, date: r['date'] as String, partyId: r['party_id'] as String,
+          productId: r['product_id'] as String?, title: r['title'] as String, qty: (r['qty'] as num).toDouble(),
+          unitPrice: r['unit_price'] as int, percent: (r['advance_percent'] as num).toDouble(),
+          advance: r['advance_amount'] as int, accountId: r['account_id'] as String?, txId: r['tx_id'] as String?,
+          status: r['status'] as String, released: r['released'] as int, closedDate: r['closed_date'] as String,
+          note: r['note'] as String, applied: (r['applied'] as num).round(), invoicedQty: (r['invoiced'] as num).toDouble(),
+        )
+    ];
+  }
+
+  Future<int> nextOrderNumber() async {
+    final r = await store.db.rawQuery('SELECT COALESCE(MAX(number),0)+1 AS n FROM orders WHERE deleted=0');
+    return r.first['n'] as int;
+  }
+
+  /// Creates or edits an order. The advance is booked as a receipt into
+  /// [accountId] that has no party, so the customer does not become a
+  /// creditor; it is applied to invoices as they are issued.
+  Future<String> saveOrder({
+    String? id,
+    required int number,
+    required String date,
+    required String partyId,
+    String? productId,
+    required String title,
+    required double qty,
+    required int unitPrice,
+    required double percent,
+    required int advance,
+    String? accountId,
+    String note = '',
+  }) async {
+    if (advance > 0 && accountId == null) throw StateError('حساب دریافت پیش‌دریافت را انتخاب کنید.');
+    final oid = id ?? AppDb.newId();
+    await store.db.transaction((tx) async {
+      final old = id == null ? null : (await tx.query('orders', where: 'id=?', whereArgs: [id])).firstOrNull;
+      final applied = id == null
+          ? 0
+          : ((await tx.rawQuery('SELECT COALESCE(SUM(prepaid),0) AS n FROM invoices WHERE order_id=? AND deleted=0', [id])).first['n'] as num).round();
+      final released = (old?['released'] as int?) ?? 0;
+      if (advance < applied + released) {
+        throw StateError('مبلغ پیش‌دریافت نمی‌تواند از مقدار کسرشده روی فاکتورها (${money(applied + released)}) کمتر باشد.');
+      }
+      final partyName = (await tx.query('parties', columns: ['name'], where: 'id=?', whereArgs: [partyId])).firstOrNull?['name'] ?? '';
+      var txId = old?['tx_id'] as String?;
+      if (advance > 0) {
+        txId ??= AppDb.newId();
+        await store.save('transactions', {
+          'id': txId, 'date': date, 'kind': 'receipt', 'amount': advance, 'account_id': accountId,
+          'party_id': null, 'category_id': null, 'invoice_id': null,
+          'description': 'پیش‌دریافت سفارش ${faDigits('$number')} - $partyName', 'to_account_id': null,
+        }, exec: tx);
+      } else if (txId != null) {
+        await store.softDelete('transactions', txId, exec: tx);
+        txId = null;
+      }
+      await store.save('orders', {
+        'id': oid, 'number': number, 'date': date, 'party_id': partyId, 'product_id': productId, 'title': title,
+        'qty': qty, 'unit_price': unitPrice, 'advance_percent': percent, 'advance_amount': advance,
+        'account_id': accountId, 'tx_id': txId, 'status': old?['status'] ?? 'open', 'released': released,
+        'closed_date': old?['closed_date'] ?? '', 'note': note,
+      }, exec: tx);
+    });
+    changed();
+    return oid;
+  }
+
+  /// Closes an order: whatever is left of the advance becomes a credit of the
+  /// customer. Reopening takes that credit back.
+  Future<void> setOrderOpen(String id, bool open) async {
+    final o = (await orders()).firstWhere((x) => x.id == id);
+    await store.save('orders', {
+      ...(await store.db.query('orders', where: 'id=?', whereArgs: [id])).first,
+      'status': open ? 'open' : 'closed',
+      'released': open ? 0 : o.available,
+      'closed_date': open ? '' : todayIso(),
+    });
+    changed();
+  }
+
+  /// Returns an error message when invoices still use the order.
+  Future<String?> deleteOrder(String id) async {
+    if (await _count('invoices', 'order_id', id) > 0) return 'برای این سفارش فاکتور صادر شده است؛ ابتدا فاکتورها را حذف یا از سفارش جدا کنید.';
+    final o = (await store.db.query('orders', where: 'id=?', whereArgs: [id])).first;
+    await store.db.transaction((tx) async {
+      await store.softDelete('orders', id, exec: tx);
+      if (o['tx_id'] != null) await store.softDelete('transactions', o['tx_id'] as String, exec: tx);
+    });
+    changed();
+    return null;
   }
 
   // ---- delivery receipts --------------------------------------------------
@@ -991,6 +1169,12 @@ class Repo extends ChangeNotifier {
     for (final i in await invoices(partyId: partyId)) {
       if (!i.info.ledger) continue;
       items.add((i.date, 0, '${i.info.label} ${faDigits('${i.number}')}', i.info.partyOwesUs ? i.total : -i.total));
+      if (i.prepaid > 0) items.add((i.date, 1, 'کسر از پیش‌دریافت (فاکتور ${faDigits('${i.number}')})', -i.prepaid));
+    }
+    for (final o in await orders(partyId: partyId)) {
+      if (o.released > 0 && o.closedDate.isNotEmpty) {
+        items.add((o.closedDate, 1, 'پیش‌دریافت مصرف‌نشدهٔ سفارش ${faDigits('${o.number}')} (اعتبار مشتری)', -o.released));
+      }
     }
     for (final t in await transactions(partyId: partyId)) {
       final what = t.kind == 'receipt' ? 'دریافت' : 'پرداخت';
@@ -1137,6 +1321,7 @@ class Repo extends ChangeNotifier {
       chequesReceived: cheques.where((c) => c.kind == 'received').fold(0, (a, c) => a + c.amount),
       payables: parts.where((p) => p.balance < 0).fold(0, (a, p) => a - p.balance),
       chequesIssued: cheques.where((c) => c.kind == 'issued').fold(0, (a, c) => a + c.amount),
+      advances: (await orders()).fold(0, (a, o) => a + o.available),
     );
   }
 
@@ -1157,7 +1342,8 @@ class Repo extends ChangeNotifier {
       final list = (byParty[p.id] ?? [])..sort((a, b) => b.date.compareTo(a.date)); // newest first
       for (final i in list) {
         if (left <= 0) break;
-        final part = i.total < left ? i.total : left;
+        final owed = i.total - i.prepaid;
+        final part = owed < left ? owed : left;
         left -= part;
         final age = today.difference(DateTime.parse(i.date)).inDays;
         buckets[age <= 30 ? 0 : (age <= 60 ? 1 : (age <= 90 ? 2 : 3))] += part;
@@ -1280,7 +1466,8 @@ class Repo extends ChangeNotifier {
       await scale('accounts', ['opening']);
       await scale('parties', ['opening']);
       await scale('transactions', ['amount']);
-      await scale('invoices', ['discount']);
+      await scale('invoices', ['discount', 'prepaid']);
+      await scale('orders', ['unit_price', 'advance_amount', 'released']);
       await scale('invoice_items', ['unit_price']);
       await scale('products', ['sale_price', 'buy_price']);
       await scale('cheques', ['amount']);

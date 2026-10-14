@@ -109,6 +109,7 @@ class FinancialPositionTab extends StatelessWidget {
           Section(title: 'بدهی‌ها', child: Column(children: [
             _line(c, 'بدهی به اشخاص', f.payables),
             _line(c, 'چک‌های پرداختی در انتظار', f.chequesIssued),
+            if (f.advances > 0) _line(c, 'پیش‌دریافت از مشتریان (هنوز روی فاکتور نرفته)', f.advances),
             for (final (n, v) in f.accounts.where((a) => a.$2 < 0)) _line(c, 'برداشت بیش از موجودی $n', -v),
             const Divider(),
             _line(c, 'جمع بدهی‌ها', f.liabilities, bold: true),

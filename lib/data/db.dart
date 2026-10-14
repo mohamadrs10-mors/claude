@@ -21,9 +21,10 @@ const syncTables = [
   'transactions',
   'deliveries',
   'delivery_items',
+  'orders',
 ];
 
-const _schemaVersion = 5;
+const _schemaVersion = 6;
 
 const _v2Tables = [
   '''CREATE TABLE products (
@@ -77,6 +78,29 @@ const _v5Tables = [
   'CREATE INDEX idx_delivery_items_seq ON delivery_items(seq)',
 ];
 
+/// Orders with an advance payment (سفارش و پیش‌دریافت). The advance is received
+/// into an account without crediting the party; every sale invoice made for the
+/// order counts `advance_percent` of its total as already paid (invoices.prepaid).
+const _v6Tables = [
+  '''CREATE TABLE orders (
+    id TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
+    device_id TEXT NOT NULL, seq INTEGER NOT NULL,
+    number INTEGER NOT NULL, date TEXT NOT NULL, party_id TEXT NOT NULL,
+    product_id TEXT, title TEXT NOT NULL, qty REAL NOT NULL DEFAULT 0, unit_price INTEGER NOT NULL DEFAULT 0,
+    advance_percent REAL NOT NULL DEFAULT 0, advance_amount INTEGER NOT NULL DEFAULT 0,
+    account_id TEXT, tx_id TEXT, status TEXT NOT NULL DEFAULT 'open',
+    released INTEGER NOT NULL DEFAULT 0, closed_date TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '')''',
+  'CREATE INDEX idx_orders_seq ON orders(seq)',
+  'CREATE INDEX idx_invoices_order ON invoices(order_id)',
+];
+
+/// Upgrade 5 -> 6: orders and the advance applied to each invoice.
+const _migrate5to6 = [
+  'ALTER TABLE invoices ADD COLUMN order_id TEXT',
+  'ALTER TABLE invoices ADD COLUMN prepaid INTEGER NOT NULL DEFAULT 0',
+  ..._v6Tables,
+];
+
 /// Upgrade 3 -> 4: opening balance of a party, transfers between accounts,
 /// the link from a pro-forma to the invoice made from it.
 const _migrate3to4 = [
@@ -125,7 +149,8 @@ final _schema = [
     device_id TEXT NOT NULL, seq INTEGER NOT NULL,
     number INTEGER NOT NULL, kind TEXT NOT NULL, date TEXT NOT NULL, party_id TEXT NOT NULL,
     discount INTEGER NOT NULL DEFAULT 0, note TEXT NOT NULL DEFAULT '',
-    tax_percent INTEGER NOT NULL DEFAULT 0, ref_id TEXT)''',
+    tax_percent INTEGER NOT NULL DEFAULT 0, ref_id TEXT,
+    order_id TEXT, prepaid INTEGER NOT NULL DEFAULT 0)''',
   '''CREATE TABLE invoice_items (
     id TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
     device_id TEXT NOT NULL, seq INTEGER NOT NULL,
@@ -134,6 +159,7 @@ final _schema = [
   ..._v2Tables,
   ..._v3Tables,
   ..._v5Tables,
+  ..._v6Tables,
   '''CREATE TABLE transactions (
     id TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
     device_id TEXT NOT NULL, seq INTEGER NOT NULL,
@@ -144,7 +170,7 @@ final _schema = [
   'CREATE INDEX idx_tx_party ON transactions(party_id)',
   'CREATE INDEX idx_items_inv ON invoice_items(invoice_id)',
   for (final t in syncTables)
-    if (t != 'deliveries' && t != 'delivery_items') 'CREATE INDEX idx_${t}_seq ON $t(seq)',
+    if (!const {'deliveries', 'delivery_items', 'orders'}.contains(t)) 'CREATE INDEX idx_${t}_seq ON $t(seq)',
 ];
 
 /// Thin wrapper around the SQLite database that stamps every write with the
@@ -187,6 +213,11 @@ class AppDb {
           }
           if (from < 5) {
             for (final q in _migrate4to5) {
+              await db.execute(q);
+            }
+          }
+          if (from < 6) {
+            for (final q in _migrate5to6) {
               await db.execute(q);
             }
           }

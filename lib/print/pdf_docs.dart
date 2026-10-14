@@ -224,8 +224,9 @@ class PdfDocs {
       if (inv.discount > 0) ('تخفیف', money(inv.discount), false),
       if (inv.taxPercent > 0) ('مالیات بر ارزش افزوده (${faDigits('${inv.taxPercent}')}٪)', money(inv.tax), false),
       ('مبلغ نهایی', money(inv.total), true),
+      if (inv.prepaid > 0) ('کسر از پیش‌دریافت', money(inv.prepaid), false),
       if (inv.paid > 0) (info.paymentKind == 'receipt' ? 'دریافت‌شده' : 'پرداخت‌شده', money(inv.paid), false),
-      if (inv.paid > 0) ('مانده', money(inv.remaining), true),
+      if (inv.paid > 0 || inv.prepaid > 0) ('مانده', money(inv.remaining), true),
     ];
 
     if (roll) {

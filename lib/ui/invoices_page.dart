@@ -114,8 +114,8 @@ class _InvoicesPageState extends State<InvoicesPage> {
   }
 }
 
-void openInvoiceEditor(BuildContext c, Repo repo, {String? invoiceId}) =>
-    Navigator.push(c, MaterialPageRoute(builder: (_) => InvoiceEditPage(repo: repo, invoiceId: invoiceId)));
+void openInvoiceEditor(BuildContext c, Repo repo, {String? invoiceId, String? partyId, String? orderId}) =>
+    Navigator.push(c, MaterialPageRoute(builder: (_) => InvoiceEditPage(repo: repo, invoiceId: invoiceId, initialPartyId: partyId, initialOrderId: orderId)));
 
 class InvoiceViewPage extends StatelessWidget {
   const InvoiceViewPage({super.key, required this.repo, required this.invoiceId});
@@ -224,6 +224,7 @@ class InvoiceViewPage extends StatelessWidget {
                       if (inv.taxPercent > 0) _row('مالیات (${faDigits('${inv.taxPercent}')}٪)', inv.tax),
                       const Divider(height: 20),
                       _row('مبلغ نهایی', inv.total, bold: true),
+                      if (inv.prepaid > 0) _row('کسر از پیش‌دریافت سفارش', inv.prepaid),
                       if (info.ledger) ...[
                         _row(info.paymentKind == 'receipt' ? 'دریافت‌شده' : 'پرداخت‌شده', inv.paid),
                         _row('مانده', inv.remaining, bold: true),
@@ -323,9 +324,12 @@ class _Line {
 }
 
 class InvoiceEditPage extends StatefulWidget {
-  const InvoiceEditPage({super.key, required this.repo, this.invoiceId});
+  const InvoiceEditPage({super.key, required this.repo, this.invoiceId, this.initialPartyId, this.initialOrderId});
   final Repo repo;
   final String? invoiceId;
+
+  /// For a new invoice made from an order: the customer and the order.
+  final String? initialPartyId, initialOrderId;
   @override
   State<InvoiceEditPage> createState() => _InvoiceEditPageState();
 }
@@ -343,6 +347,9 @@ class _InvoiceEditPageState extends State<InvoiceEditPage> {
   List<Party> parties = [];
   List<Product> products = [];
   Map<String, double> originalQty = {};
+  List<Order> orders = [];
+  String? orderId, originalOrderId;
+  int ownPrepaid = 0;
   String autoNumber = '';
   String? originalKind;
   bool loaded = false;
@@ -373,6 +380,9 @@ class _InvoiceEditPageState extends State<InvoiceEditPage> {
       originalKind = inv.kind;
       date = inv.date;
       partyId = inv.partyId;
+      orderId = inv.orderId;
+      originalOrderId = inv.orderId;
+      ownPrepaid = inv.prepaid;
       discount.text = inv.discount == 0 ? '' : '${inv.discount}';
       tax.text = '${inv.taxPercent}';
       note.text = inv.note;
@@ -382,12 +392,48 @@ class _InvoiceEditPageState extends State<InvoiceEditPage> {
         lines.add(_Line(t: it.title, q: it.qty == it.qty.roundToDouble() ? '${it.qty.round()}' : '${it.qty}', p: '${it.unitPrice}', productId: it.productId));
       }
     } else {
+      partyId = widget.initialPartyId;
+      orderId = widget.initialOrderId;
       autoNumber = '${await repo.nextInvoiceNumber()}';
       number.text = autoNumber;
       tax.text = repo.setting('default_tax', '0');
       lines.add(_Line());
     }
+    await _loadOrders();
+    if (widget.invoiceId == null && orderId != null) _pickOrder(orderId);
     if (mounted) setState(() => loaded = true);
+  }
+
+  /// Open orders of the chosen customer, to take an advance payment from.
+  Future<void> _loadOrders() async {
+    final pid = partyId;
+    final list = pid == null ? <Order>[] : (await repo.orders(partyId: pid)).where((o) => o.open || o.id == originalOrderId).toList();
+    if (!mounted) return;
+    setState(() {
+      orders = list;
+      if (!list.any((o) => o.id == orderId)) orderId = null;
+    });
+  }
+
+  Order? get order => orders.where((o) => o.id == orderId).firstOrNull;
+
+  /// What this invoice would take from the order's advance (same rule as when saving).
+  int _prepaid(int total) {
+    final o = order;
+    if (o == null || kind != 'sale') return 0;
+    return Repo.prepaidFor(total, o.percent, o.available + (o.id == originalOrderId ? ownPrepaid : 0));
+  }
+
+  void _pickOrder(String? id) {
+    setState(() => orderId = id);
+    final o = order;
+    if (o == null || lines.length != 1 || lines.first.title.text.trim().isNotEmpty) return;
+    final l = lines.first;
+    l.productId = o.productId;
+    l.title.text = o.title;
+    if (o.remainingQty > 0) l.qty.text = qtyText(o.remainingQty);
+    l.price.text = money(o.unitPrice);
+    setState(() {});
   }
 
   int get subtotal => lines.fold(0, (a, l) => a + l.total);
@@ -460,7 +506,10 @@ class _InvoiceEditPageState extends State<InvoiceEditPage> {
                     decoration: InputDecoration(labelText: info.partyLabel),
                     items: [for (final p in parties) DropdownMenuItem(value: p.id, child: Text(p.name))],
                     validator: (v) => v == null ? 'یک شخص انتخاب کنید' : null,
-                    onChanged: (v) => partyId = v,
+                    onChanged: (v) {
+                      partyId = v;
+                      _loadOrders();
+                    },
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -476,10 +525,29 @@ class _InvoiceEditPageState extends State<InvoiceEditPage> {
                       parties = now;
                       if (added != null) partyId = added.id;
                     });
+                    _loadOrders();
                   },
                   icon: const Icon(Icons.person_add_alt),
                 ),
               ]),
+              if (kind == 'sale' && orders.isNotEmpty) ...[
+                gap(),
+                DropdownButtonFormField<String?>(
+                  key: ValueKey('ord$partyId${orders.length}'),
+                  initialValue: orderId,
+                  isExpanded: true,
+                  decoration: const InputDecoration(labelText: 'سفارش دارای پیش‌دریافت (اختیاری)'),
+                  items: [
+                    const DropdownMenuItem<String?>(value: null, child: Text('— بدون سفارش —')),
+                    for (final o in orders)
+                      DropdownMenuItem(
+                        value: o.id,
+                        child: Text('سفارش ${faDigits('${o.number}')} • ${o.title} • ${faDigits(qtyText(o.percent))}٪ پیش‌دریافت', overflow: TextOverflow.ellipsis),
+                      ),
+                  ],
+                  onChanged: _pickOrder,
+                ),
+              ],
             ])),
             gap(16),
             Section(
@@ -537,6 +605,10 @@ class _InvoiceEditPageState extends State<InvoiceEditPage> {
                     if (t > 0) row('مالیات', t),
                     const Divider(height: 16),
                     row('مبلغ نهایی', net + t, bold: true),
+                    if (order != null && kind == 'sale') ...[
+                      row('کسر از پیش‌دریافت (${faDigits(qtyText(order!.percent))}٪)', _prepaid(net + t)),
+                      row('مانده بدهی مشتری', net + t - _prepaid(net + t), bold: true),
+                    ],
                   ]);
                 },
               ),
@@ -679,6 +751,7 @@ class _InvoiceEditPageState extends State<InvoiceEditPage> {
       items: [
         for (final l in lines) InvoiceItem(l.title.text.trim(), l.q, parseAmount(l.price.text), productId: l.productId),
       ],
+      orderId: kind == 'sale' ? orderId : null,
     );
     if (mounted) Navigator.pop(context);
   }
