@@ -23,9 +23,10 @@ const syncTables = [
   'delivery_items',
   'orders',
   'order_items',
+  'product_groups',
 ];
 
-const _schemaVersion = 8;
+const _schemaVersion = 9;
 
 const _v2Tables = [
   '''CREATE TABLE products (
@@ -107,6 +108,20 @@ const _v7Tables = [
   'CREATE INDEX idx_order_items_order ON order_items(order_id)',
 ];
 
+/// Product groups (گروه کالایی): every product can belong to one group.
+const _v9Tables = [
+  '''CREATE TABLE product_groups (
+    id TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
+    device_id TEXT NOT NULL, seq INTEGER NOT NULL, name TEXT NOT NULL)''',
+  'CREATE INDEX idx_product_groups_seq ON product_groups(seq)',
+];
+
+/// Upgrade 8 -> 9: product groups and the group of a product.
+const _migrate8to9 = [
+  'ALTER TABLE products ADD COLUMN group_id TEXT',
+  ..._v9Tables,
+];
+
 /// Upgrade 7 -> 8: a received cheque can be (part of) an order's advance.
 const _migrate7to8 = [
   'ALTER TABLE cheques ADD COLUMN order_id TEXT',
@@ -176,6 +191,7 @@ final _schema = [
     unit_price INTEGER NOT NULL, position INTEGER NOT NULL DEFAULT 0, product_id TEXT)''',
   ..._v2Tables,
   ..._migrate7to8,
+  ..._migrate8to9,
   ..._v3Tables,
   ..._v5Tables,
   ..._v6Tables,
@@ -190,7 +206,7 @@ final _schema = [
   'CREATE INDEX idx_tx_party ON transactions(party_id)',
   'CREATE INDEX idx_items_inv ON invoice_items(invoice_id)',
   for (final t in syncTables)
-    if (!const {'deliveries', 'delivery_items', 'orders', 'order_items'}.contains(t)) 'CREATE INDEX idx_${t}_seq ON $t(seq)',
+    if (!const {'deliveries', 'delivery_items', 'orders', 'order_items', 'product_groups'}.contains(t)) 'CREATE INDEX idx_${t}_seq ON $t(seq)',
 ];
 
 /// Orders made before orders could hold several products have one product in
@@ -274,6 +290,11 @@ class AppDb {
           }
           if (from < 8) {
             for (final q in _migrate7to8) {
+              await db.execute(q);
+            }
+          }
+          if (from < 9) {
+            for (final q in _migrate8to9) {
               await db.execute(q);
             }
           }

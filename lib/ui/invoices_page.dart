@@ -143,14 +143,14 @@ class InvoiceViewPage extends StatelessWidget {
                 filename: 'invoice-${inv.number}.pdf',
                 build: (s, f) => PdfDocs(repo, settings: s).invoice(inv, items, party, format: f),
               );
-          Future<void> printRoll() async {
-            try {
-              final bytes = await PdfDocs(repo).invoice(inv, items, party, roll: true);
-              await PdfDocs.printRoll(bytes, '${info.label} ${inv.number}', repo.printSettings);
-            } catch (e) {
-              if (c.mounted) toast(c, 'چاپ ممکن نشد: $e');
-            }
-          }
+          Future<void> printRoll() => showPrintDialog(
+                c,
+                repo,
+                title: '${info.label} ${faDigits('${inv.number}')}',
+                filename: 'invoice-${inv.number}-roll.pdf',
+                roll: true,
+                build: (s, f) => PdfDocs(repo, settings: s).invoice(inv, items, party, roll: true),
+              );
 
           return Scaffold(
             appBar: AppBar(

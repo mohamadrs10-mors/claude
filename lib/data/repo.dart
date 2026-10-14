@@ -45,13 +45,26 @@ class Product {
     this.note = '',
     this.stock = 0,
     this.costPrice = 0,
+    this.groupId,
   });
   final String id, name, code, unit, note;
+
+  /// The product group (گروه کالایی), if any.
+  final String? groupId;
 
   /// Final cost of one unit from the cost sheet (0 when there is none).
   final int salePrice, buyPrice, costPrice;
   final double openingStock, minStock, stock;
   bool get low => minStock > 0 && stock <= minStock;
+}
+
+/// A group of products (گروه کالایی) such as "چوب" or "پارچه".
+class ProductGroup {
+  ProductGroup(this.id, this.name, this.count);
+  final String id, name;
+
+  /// Number of products in the group.
+  final int count;
 }
 
 class SavedFormula {
@@ -581,6 +594,7 @@ class Repo extends ChangeNotifier {
           note: r['note'] as String,
           stock: (r['stock'] as num).toDouble(),
           costPrice: r['cost_price'] as int,
+          groupId: r['group_id'] as String?,
         )
     ];
   }
@@ -595,11 +609,52 @@ class Repo extends ChangeNotifier {
     double openingStock = 0,
     double minStock = 0,
     String note = '',
+    String? groupId,
+    bool clearGroup = false,
   }) async {
+    // Callers that do not know about groups (spreadsheet import...) keep the group a product has.
+    var group = groupId;
+    if (group == null && !clearGroup && id != null) {
+      group = (await store.db.query('products', columns: ['group_id'], where: 'id=?', whereArgs: [id])).firstOrNull?['group_id'] as String?;
+    }
     await store.save('products', {
       'id': ?id,
       'name': name, 'code': code, 'unit': unit, 'sale_price': salePrice, 'buy_price': buyPrice,
-      'opening_stock': openingStock, 'min_stock': minStock, 'note': note,
+      'opening_stock': openingStock, 'min_stock': minStock, 'note': note, 'group_id': group,
+    });
+    changed();
+  }
+
+  // ---- product groups -----------------------------------------------------
+
+  Future<List<ProductGroup>> productGroups() async {
+    final rows = await store.db.rawQuery('''
+      SELECT g.id, g.name, (SELECT COUNT(*) FROM products p WHERE p.group_id=g.id AND p.deleted=0) AS n
+      FROM product_groups g WHERE g.deleted=0 ORDER BY g.name''');
+    return [for (final r in rows) ProductGroup(r['id'] as String, r['name'] as String, (r['n'] as num).toInt())];
+  }
+
+  Future<String> saveProductGroup({String? id, required String name}) async {
+    final gid = id ?? AppDb.newId();
+    await store.save('product_groups', {'id': gid, 'name': name});
+    changed();
+    return gid;
+  }
+
+  /// The group called [name] (created when there is none).
+  Future<String> groupIdByName(String name) async {
+    final t = name.trim();
+    final found = (await productGroups()).where((g) => g.name == t).firstOrNull;
+    return found?.id ?? await saveProductGroup(name: t);
+  }
+
+  /// Deleting a group keeps its products; they just have no group any more.
+  Future<void> deleteProductGroup(String id) async {
+    await store.db.transaction((tx) async {
+      await store.softDelete('product_groups', id, exec: tx);
+      for (final p in await tx.query('products', where: 'group_id=? AND deleted=0', whereArgs: [id])) {
+        await store.save('products', {...p, 'group_id': null}, exec: tx);
+      }
     });
     changed();
   }

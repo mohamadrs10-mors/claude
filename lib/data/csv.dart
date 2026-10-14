@@ -82,6 +82,7 @@ const _productCols = {
   'opening': ['موجودی اولیه', 'موجودی', 'opening', 'stock', 'qty'],
   'min': ['حداقل موجودی', 'حداقل', 'min', 'min_stock'],
   'note': ['توضیحات', 'یادداشت', 'note', 'description'],
+  'group': ['گروه', 'گروه کالا', 'گروه کالایی', 'group', 'category'],
 };
 const _partyCols = {
   'name': ['نام', 'نام شخص', 'name'],
@@ -112,9 +113,11 @@ extension CsvRepo on Repo {
     String n(num v) => v == v.roundToDouble() ? '${v.round()}' : '$v';
     switch (what) {
       case 'products':
+        final groups = {for (final g in await productGroups()) g.id: g.name};
         return [
-          ['نام', 'کد', 'واحد', 'قیمت فروش', 'قیمت خرید', 'موجودی اولیه', 'موجودی فعلی', 'حداقل موجودی', 'توضیحات'],
-          for (final p in await products()) [p.name, p.code, p.unit, '${p.salePrice}', '${p.buyPrice}', n(p.openingStock), n(p.stock), n(p.minStock), p.note],
+          ['نام', 'کد', 'واحد', 'قیمت فروش', 'قیمت خرید', 'موجودی اولیه', 'موجودی فعلی', 'حداقل موجودی', 'توضیحات', 'گروه'],
+          for (final p in await products())
+            [p.name, p.code, p.unit, '${p.salePrice}', '${p.buyPrice}', n(p.openingStock), n(p.stock), n(p.minStock), p.note, groups[p.groupId] ?? ''],
         ];
       case 'parties':
         return [
@@ -167,6 +170,8 @@ extension CsvRepo on Repo {
         openingStock: col.containsKey('opening') ? Csv.number(cell(r, 'opening')) : (match?.openingStock ?? 0),
         minStock: col.containsKey('min') ? Csv.number(cell(r, 'min')) : (match?.minStock ?? 0),
         note: col.containsKey('note') ? cell(r, 'note') : (match?.note ?? ''),
+        // A group column creates the groups that do not exist yet; without one, groups are left alone.
+        groupId: cell(r, 'group').isEmpty ? null : await groupIdByName(cell(r, 'group')),
       );
       match == null ? added++ : updated++;
     }

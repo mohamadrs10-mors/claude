@@ -23,14 +23,28 @@ class ProductsPage extends StatefulWidget {
 class _ProductsPageState extends State<ProductsPage> {
   String q = '';
 
+  /// null = every group, '' = products without a group, otherwise a group id.
+  String? groupFilter;
+
   @override
-  Widget build(BuildContext context) => RepoBuilder<List<Product>>(
+  Widget build(BuildContext context) => RepoBuilder<(List<Product>, List<ProductGroup>)>(
         repo: widget.repo,
-        load: widget.repo.products,
-        builder: (c, all) {
-          final list = all.where((p) => q.isEmpty || p.name.contains(q) || p.code.contains(q)).toList();
+        load: () async => (await widget.repo.products(), await widget.repo.productGroups()),
+        builder: (c, data) {
+          final (all, groups) = data;
+          final gid = groups.any((g) => g.id == groupFilter) || groupFilter == '' ? groupFilter : null;
+          final list = all
+              .where((p) => (q.isEmpty || p.name.contains(q) || p.code.contains(q)) &&
+                  (gid == null || (gid == '' ? p.groupId == null || !groups.any((g) => g.id == p.groupId) : p.groupId == gid)))
+              .toList();
+          final names = {for (final g in groups) g.id: g.name};
           final stockValue = all.fold<double>(0, (a, p) => a + (p.stock > 0 ? p.stock * p.buyPrice : 0));
           final low = all.where((p) => p.low).length;
+          // Sections: one per group (in name order), then the products without a group.
+          final sections = <(ProductGroup?, List<Product>)>[
+            for (final g in groups) (g, [for (final p in list) if (p.groupId == g.id) p]),
+            (null, [for (final p in list) if (p.groupId == null || !names.containsKey(p.groupId)) p]),
+          ].where((s) => s.$2.isNotEmpty || (s.$1 != null && q.isEmpty && (gid == null || gid == s.$1!.id))).toList();
           return Scaffold(
             body: Constrained(
               child: ListView(padding: const EdgeInsets.fromLTRB(16, 8, 16, 96), children: [
@@ -45,24 +59,62 @@ class _ProductsPageState extends State<ProductsPage> {
                 Row(children: [
                   Expanded(child: SearchBox(onChanged: (v) => setState(() => q = v), hint: 'جستجوی نام یا کد کالا...')),
                   const SizedBox(width: 8),
-                  PrintButton(repo: widget.repo, label: 'چاپ موجودی', doc: () => stockDoc(list)),
+                  PrintButton(repo: widget.repo, label: 'چاپ موجودی', doc: () => stockDoc(list, groups: names)),
                 ]),
+                const SizedBox(height: 8),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(children: [
+                    ChoiceChip(label: const Text('همه'), selected: gid == null, onSelected: (_) => setState(() => groupFilter = null)),
+                    for (final g in groups) ...[
+                      const SizedBox(width: 8),
+                      ChoiceChip(label: Text('${g.name} (${faDigits('${g.count}')})'), selected: gid == g.id, onSelected: (_) => setState(() => groupFilter = g.id)),
+                    ],
+                    if (groups.isNotEmpty) ...[
+                      const SizedBox(width: 8),
+                      ChoiceChip(label: const Text('بدون گروه'), selected: gid == '', onSelected: (_) => setState(() => groupFilter = '')),
+                    ],
+                    const SizedBox(width: 8),
+                    ActionChip(avatar: const Icon(Icons.folder_outlined, size: 18), label: const Text('مدیریت گروه‌ها'), onPressed: () => showGroupsDialog(c, widget.repo)),
+                  ]),
+                ),
                 const SizedBox(height: 12),
-                if (list.isEmpty)
-                  emptyState(all.isEmpty ? 'هنوز کالایی تعریف نشده است.\nبا دکمهٔ «کالای جدید» شروع کنید.' : 'کالایی پیدا نشد.')
+                if (all.isEmpty && groups.isEmpty)
+                  emptyState('هنوز کالایی تعریف نشده است.\nبا دکمهٔ «کالای جدید» شروع کنید؛ اگر کالاها گروه‌بندی دارند، اول از «مدیریت گروه‌ها» گروه بسازید.')
+                else if (sections.isEmpty)
+                  emptyState('کالایی پیدا نشد.')
                 else
-                  Card(
-                    child: Column(children: [
-                      for (var i = 0; i < list.length; i++) ...[
-                        if (i > 0) const Divider(),
-                        _tile(c, list[i]),
-                      ],
-                    ]),
-                  ),
+                  for (final (g, items) in sections) ...[
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(4, 4, 4, 6),
+                      child: Row(children: [
+                        Icon(g == null ? Icons.folder_off_outlined : Icons.folder_outlined, size: 20, color: Theme.of(c).colorScheme.primary),
+                        const SizedBox(width: 8),
+                        Expanded(child: Text('${g?.name ?? 'بدون گروه'} (${faDigits('${items.length}')})', style: Theme.of(c).textTheme.titleSmall)),
+                        TextButton.icon(
+                          onPressed: () => editProduct(c, widget.repo, presetGroup: g?.id),
+                          icon: const Icon(Icons.add, size: 18),
+                          label: Text(g == null ? 'کالای جدید' : 'کالا در این گروه'),
+                        ),
+                      ]),
+                    ),
+                    if (items.isEmpty)
+                      const Padding(padding: EdgeInsets.fromLTRB(12, 0, 12, 12), child: Text('هنوز کالایی در این گروه نیست.'))
+                    else
+                      Card(
+                        margin: const EdgeInsets.only(bottom: 12),
+                        child: Column(children: [
+                          for (var i = 0; i < items.length; i++) ...[
+                            if (i > 0) const Divider(),
+                            _tile(c, items[i]),
+                          ],
+                        ]),
+                      ),
+                  ],
               ]),
             ),
             floatingActionButton: FloatingActionButton.extended(
-              onPressed: () => editProduct(c, widget.repo),
+              onPressed: () => editProduct(c, widget.repo, presetGroup: gid == '' ? null : gid),
               icon: const Icon(Icons.add),
               label: const Text('کالای جدید'),
             ),
@@ -85,12 +137,17 @@ class _ProductsPageState extends State<ProductsPage> {
         if (p.costPrice > 0) 'تمام‌شده ${money(p.costPrice)}',
       ].join(' • ')),
       trailing: StatusChip('${qtyText(p.stock)} ${p.unit}', color),
-      onTap: () => editProduct(c, widget.repo, p),
+      onTap: () => editProduct(c, widget.repo, product: p),
     );
   }
 }
 
-Future<void> editProduct(BuildContext c, Repo repo, [Product? p]) async {
+/// [presetGroup] is the group a new product starts in (when added from inside a group).
+Future<void> editProduct(BuildContext c, Repo repo, {Product? product, String? presetGroup}) async {
+  final p = product;
+  var groups = await repo.productGroups();
+  String? group = p?.groupId ?? presetGroup;
+  if (!c.mounted) return;
   final name = TextEditingController(text: p?.name);
   final code = TextEditingController(text: p?.code);
   final unit = TextEditingController(text: p?.unit ?? 'عدد');
@@ -103,7 +160,7 @@ Future<void> editProduct(BuildContext c, Repo repo, [Product? p]) async {
 
   await showDialog(
     context: c,
-    builder: (dc) => AlertDialog(
+    builder: (dc) => StatefulBuilder(builder: (dc, set) => AlertDialog(
       title: Text(p == null ? 'کالای جدید' : 'ویرایش کالا'),
       content: SizedBox(
         width: 460,
@@ -116,6 +173,33 @@ Future<void> editProduct(BuildContext c, Repo repo, [Product? p]) async {
                 decoration: const InputDecoration(labelText: 'نام کالا یا خدمت'),
                 validator: (v) => (v ?? '').trim().isEmpty ? 'نام را وارد کنید' : null,
               ),
+              gap(),
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Expanded(
+                  child: DropdownButtonFormField<String?>(
+                    key: ValueKey('$group${groups.length}'),
+                    initialValue: groups.any((g) => g.id == group) ? group : null,
+                    decoration: const InputDecoration(labelText: 'گروه کالایی'),
+                    items: [
+                      const DropdownMenuItem<String?>(value: null, child: Text('— بدون گروه —')),
+                      for (final g in groups) DropdownMenuItem(value: g.id, child: Text(g.name)),
+                    ],
+                    onChanged: (v) => group = v,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton.filledTonal(
+                  tooltip: 'گروه جدید',
+                  icon: const Icon(Icons.create_new_folder_outlined),
+                  onPressed: () async {
+                    final name = await askGroupName(dc);
+                    if (name == null) return;
+                    final id = await repo.groupIdByName(name);
+                    groups = await repo.productGroups();
+                    set(() => group = id);
+                  },
+                ),
+              ]),
               gap(),
               Row(children: [
                 Expanded(child: TextFormField(controller: code, decoration: const InputDecoration(labelText: 'کد / بارکد'))),
@@ -219,12 +303,86 @@ Future<void> editProduct(BuildContext c, Repo repo, [Product? p]) async {
               openingStock: parseQty(opening.text),
               minStock: parseQty(minStock.text),
               note: note.text.trim(),
+              groupId: group,
+              clearGroup: group == null,
             );
             if (dc.mounted) Navigator.pop(dc);
           },
           child: const Text('ذخیره'),
         ),
       ],
+    )),
+  );
+}
+
+/// Asks for the name of a new product group; null when cancelled.
+Future<String?> askGroupName(BuildContext c, {String initial = '', String title = 'گروه کالایی جدید'}) {
+  final ctl = TextEditingController(text: initial);
+  return showDialog<String>(
+    context: c,
+    builder: (dc) => AlertDialog(
+      title: Text(title),
+      content: TextField(controller: ctl, autofocus: true, decoration: const InputDecoration(labelText: 'نام گروه (مثلاً چوب، پارچه، یراق)')),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(dc), child: const Text('انصراف')),
+        FilledButton(
+          onPressed: () {
+            final t = ctl.text.trim();
+            if (t.isNotEmpty) Navigator.pop(dc, t);
+          },
+          child: const Text('ذخیره'),
+        ),
+      ],
+    ),
+  );
+}
+
+/// Add, rename and delete product groups. Deleting a group keeps its products.
+Future<void> showGroupsDialog(BuildContext c, Repo repo) async {
+  await showDialog<void>(
+    context: c,
+    builder: (dc) => RepoBuilder<List<ProductGroup>>(
+      repo: repo,
+      load: repo.productGroups,
+      builder: (_, groups) => AlertDialog(
+        title: const Text('گروه‌های کالایی'),
+        content: SizedBox(
+          width: 420,
+          child: groups.isEmpty
+              ? const Text('هنوز گروهی ندارید. مثلاً «چوب»، «پارچه» یا «یراق‌آلات» بسازید و کالاها را داخل آن تعریف کنید.')
+              : ListView(shrinkWrap: true, children: [
+                  for (final g in groups)
+                    ListTile(
+                      leading: const Icon(Icons.folder_outlined),
+                      title: Text(g.name),
+                      subtitle: Text('${faDigits('${g.count}')} کالا'),
+                      onTap: () async {
+                        final n = await askGroupName(dc, initial: g.name, title: 'تغییر نام گروه');
+                        if (n != null) await repo.saveProductGroup(id: g.id, name: n);
+                      },
+                      trailing: IconButton(
+                        tooltip: 'حذف گروه',
+                        icon: const Icon(Icons.delete_outline),
+                        onPressed: () async {
+                          final msg = g.count > 0 ? 'گروه حذف شود؟ ${faDigits('${g.count}')} کالای آن حفظ می‌شود و بدون گروه می‌ماند.' : 'این گروه حذف شود؟';
+                          if (await confirm(dc, msg)) await repo.deleteProductGroup(g.id);
+                        },
+                      ),
+                    ),
+                ]),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dc), child: const Text('بستن')),
+          FilledButton.icon(
+            icon: const Icon(Icons.add),
+            label: const Text('گروه جدید'),
+            onPressed: () async {
+              final n = await askGroupName(dc);
+              if (n != null) await repo.saveProductGroup(name: n);
+            },
+          ),
+        ],
+      ),
     ),
   );
 }

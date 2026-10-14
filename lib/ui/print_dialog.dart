@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:pdf/pdf.dart';
+import 'package:printing/printing.dart' show PdfPreview, LayoutCallback;
 import 'package:shamsi_date/shamsi_date.dart';
 
 import '../data/repo.dart';
@@ -37,85 +38,192 @@ Future<void> printReport(BuildContext context, Repo repo, ReportDoc doc) => show
       build: (s, f) => PdfDocs(repo, settings: s).report(doc, format: f),
     );
 
-/// Asks for the paper (A4/A5, portrait/landscape) and prints or saves the PDF.
-/// The choice is remembered as the new default; margins, text size and the
+/// Opens the print preview: the page as it will come out of the printer, with
+/// the paper (A4/A5, portrait/landscape) and the report's own options beside
+/// it. Nothing is printed until "چاپ" is pressed there; every change redraws
+/// the preview. The paper choice is remembered; margins, text size and the
 /// roll width are in Settings.
+///
+/// [options] builds extra controls (a period, a switch...) and gets a callback
+/// to call after a change so the preview is drawn again. With [roll] the page
+/// is a thermal roll whose width comes from Settings.
 Future<void> showPrintDialog(
   BuildContext context,
   Repo repo, {
   required String title,
   required String filename,
   required Future<Uint8List> Function(PrintSettings settings, PdfPageFormat format) build,
-  Widget? options,
-}) async {
-  var cur = repo.printSettings;
-  await showDialog<void>(
-    context: context,
-    builder: (dc) => StatefulBuilder(
-      builder: (dc, set) => AlertDialog(
-        title: Text('چاپ: $title', maxLines: 2, overflow: TextOverflow.ellipsis),
-        content: SizedBox(
-          width: 440,
-          child: SingleChildScrollView(
-            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-              if (options != null) ...[options, const Divider(height: 28)],
-              const Text('اندازهٔ کاغذ'),
-              const SizedBox(height: 8),
-              SegmentedButton<String>(
-                segments: [for (final e in PrintSettings.papers.entries) ButtonSegment(value: e.key, label: Text(e.value))],
-                selected: {cur.paper},
-                onSelectionChanged: (v) => set(() => cur = cur.copyWith(paper: v.first)),
+  Widget Function(BuildContext context, VoidCallback refresh)? options,
+  bool roll = false,
+}) =>
+    Navigator.of(context).push<void>(MaterialPageRoute(
+      fullscreenDialog: true,
+      builder: (_) => PrintPreviewPage(repo: repo, title: title, filename: filename, build: build, options: options, roll: roll),
+    ));
+
+/// Draws the preview of a PDF. Replaceable in tests, where there is no PDF rasteriser.
+typedef PreviewBuilder = Widget Function(Key key, LayoutCallback build, PdfPageFormat initialFormat);
+
+/// Tests set this to draw a stand-in for the PDF pages (there is no PDF rasteriser there).
+@visibleForTesting
+PreviewBuilder? printPreviewBuilderOverride;
+
+class PrintPreviewPage extends StatefulWidget {
+  const PrintPreviewPage({
+    super.key,
+    required this.repo,
+    required this.title,
+    required this.filename,
+    required this.build,
+    this.options,
+    this.roll = false,
+    this.previewBuilder,
+  });
+  final Repo repo;
+  final String title, filename;
+  final Future<Uint8List> Function(PrintSettings settings, PdfPageFormat format) build;
+  final Widget Function(BuildContext context, VoidCallback refresh)? options;
+  final bool roll;
+  final PreviewBuilder? previewBuilder;
+
+  @override
+  State<PrintPreviewPage> createState() => _PrintPreviewPageState();
+}
+
+class _PrintPreviewPageState extends State<PrintPreviewPage> {
+  late PrintSettings cur = widget.repo.printSettings;
+  int version = 0;
+
+  void _refresh() => setState(() => version++);
+
+  void _change(PrintSettings next) {
+    cur = next;
+    widget.repo.setPrint(next);
+    _refresh();
+  }
+
+  PdfPageFormat get _format => widget.roll
+      ? PdfPageFormat(cur.rollWidthMm * PdfPageFormat.mm, 200 * PdfPageFormat.mm, marginAll: 4 * PdfPageFormat.mm)
+      : cur.format;
+
+  Future<void> _print() async {
+    try {
+      if (widget.roll) {
+        await PdfDocs.printRoll(await widget.build(cur, _format), widget.title, cur);
+      } else {
+        await PdfDocs.print((f) => widget.build(cur, f), widget.title, cur);
+      }
+    } catch (e) {
+      if (mounted) toast(context, 'چاپ ممکن نشد: $e');
+    }
+  }
+
+  Future<void> _share() async {
+    try {
+      await PdfDocs.share(await widget.build(cur, _format), widget.filename);
+    } catch (e) {
+      if (mounted) toast(context, 'ذخیره ممکن نشد: $e');
+    }
+  }
+
+  Widget _controls(BuildContext c) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (widget.options != null) ...[widget.options!(c, _refresh), const Divider(height: 24)],
+        if (!widget.roll) ...[
+          const Text('اندازهٔ کاغذ'),
+          const SizedBox(height: 8),
+          SegmentedButton<String>(
+            segments: [for (final e in PrintSettings.papers.entries) ButtonSegment(value: e.key, label: Text(e.value))],
+            selected: {cur.paper},
+            onSelectionChanged: (v) => _change(cur.copyWith(paper: v.first)),
+          ),
+          const SizedBox(height: 14),
+          const Text('جهت صفحه'),
+          const SizedBox(height: 8),
+          SegmentedButton<bool>(
+            segments: const [
+              ButtonSegment(value: false, icon: Icon(Icons.crop_portrait), label: Text('عمودی')),
+              ButtonSegment(value: true, icon: Icon(Icons.crop_landscape), label: Text('افقی')),
+            ],
+            selected: {cur.landscape},
+            onSelectionChanged: (v) => _change(cur.copyWith(landscape: v.first)),
+          ),
+          const SizedBox(height: 10),
+        ] else
+          Text('رسید حرارتی ${faDigits('${cur.rollWidthMm}')} میلی‌متری؛ پهنا را از تنظیمات چاپ عوض کنید.', style: Theme.of(c).textTheme.bodySmall),
+        Text('حاشیه و اندازهٔ نوشته را از «تنظیمات ← تنظیمات چاپ» تغییر دهید.', style: Theme.of(c).textTheme.bodySmall),
+      ]);
+
+  Widget _preview() {
+    final key = ValueKey('preview-$version-${cur.paper}-${cur.landscape}');
+    Future<Uint8List> render(PdfPageFormat f) => widget.build(cur, f);
+    final custom = widget.previewBuilder ?? printPreviewBuilderOverride;
+    if (custom != null) return custom(key, render, _format);
+    return PdfPreview(
+      key: key,
+      build: render,
+      initialPageFormat: _format,
+      useActions: false,
+      canChangePageFormat: false,
+      canChangeOrientation: false,
+      canDebug: false,
+      allowPrinting: false,
+      allowSharing: false,
+      maxPageWidth: 760,
+      pdfFileName: widget.filename,
+      onError: (c, e) => Center(child: Padding(padding: const EdgeInsets.all(24), child: Text('پیش‌نمایش ساخته نشد: $e', textAlign: TextAlign.center))),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        appBar: AppBar(title: Text('پیش‌نمایش چاپ: ${widget.title}', maxLines: 1, overflow: TextOverflow.ellipsis)),
+        body: LayoutBuilder(
+          builder: (c, box) {
+            final wide = box.maxWidth >= 860;
+            if (wide) {
+              return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                SizedBox(width: 320, child: SingleChildScrollView(padding: const EdgeInsets.all(16), child: _controls(c))),
+                const VerticalDivider(width: 1),
+                Expanded(child: _preview()),
+              ]);
+            }
+            return Column(children: [
+              ExpansionTile(
+                leading: const Icon(Icons.tune),
+                title: const Text('تنظیمات چاپ'),
+                subtitle: Text(widget.roll ? 'رسید حرارتی' : '${PrintSettings.papers[cur.paper]} • ${cur.landscape ? 'افقی' : 'عمودی'}'),
+                childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                expandedCrossAxisAlignment: CrossAxisAlignment.start,
+                children: [_controls(c)],
               ),
-              const SizedBox(height: 14),
-              const Text('جهت صفحه'),
-              const SizedBox(height: 8),
-              SegmentedButton<bool>(
-                segments: const [
-                  ButtonSegment(value: false, icon: Icon(Icons.crop_portrait), label: Text('عمودی')),
-                  ButtonSegment(value: true, icon: Icon(Icons.crop_landscape), label: Text('افقی')),
-                ],
-                selected: {cur.landscape},
-                onSelectionChanged: (v) => set(() => cur = cur.copyWith(landscape: v.first)),
+              const Divider(height: 1),
+              Expanded(child: _preview()),
+            ]);
+          },
+        ),
+        bottomNavigationBar: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+            child: Row(children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  icon: const Icon(Icons.picture_as_pdf_outlined),
+                  label: const Text('ذخیره / اشتراک PDF'),
+                  onPressed: _share,
+                ),
               ),
-              const SizedBox(height: 10),
-              Text('حاشیه و اندازهٔ نوشته را از «تنظیمات ← تنظیمات چاپ» تغییر دهید.', style: Theme.of(dc).textTheme.bodySmall),
+              const SizedBox(width: 12),
+              Expanded(
+                child: FilledButton.icon(
+                  icon: const Icon(Icons.print_outlined),
+                  label: const Text('چاپ'),
+                  onPressed: _print,
+                ),
+              ),
             ]),
           ),
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(dc), child: const Text('انصراف')),
-          OutlinedButton.icon(
-            icon: const Icon(Icons.picture_as_pdf_outlined),
-            label: const Text('ذخیره / اشتراک PDF'),
-            onPressed: () async {
-              final chosen = cur;
-              Navigator.pop(dc);
-              await repo.setPrint(chosen);
-              try {
-                await PdfDocs.share(await build(chosen, chosen.format), filename);
-              } catch (e) {
-                if (context.mounted) toast(context, 'ذخیره ممکن نشد: $e');
-              }
-            },
-          ),
-          FilledButton.icon(
-            icon: const Icon(Icons.print_outlined),
-            label: const Text('چاپ'),
-            onPressed: () async {
-              final chosen = cur;
-              Navigator.pop(dc);
-              await repo.setPrint(chosen);
-              try {
-                await PdfDocs.print((f) => build(chosen, f), title, chosen);
-              } catch (e) {
-                if (context.mounted) toast(context, 'چاپ ممکن نشد: $e');
-              }
-            },
-          ),
-        ],
-      ),
-    ),
-  );
+      );
 }
 
 enum StatementPeriod { all, year, month, custom }
@@ -142,14 +250,21 @@ class StatementRange {
 }
 
 class _RangePicker extends StatefulWidget {
-  const _RangePicker(this.r);
+  const _RangePicker(this.r, this.onChanged);
   final StatementRange r;
+  final VoidCallback onChanged;
   @override
   State<_RangePicker> createState() => _RangePickerState();
 }
 
 class _RangePickerState extends State<_RangePicker> {
   StatementRange get r => widget.r;
+
+  @override
+  void setState(VoidCallback fn) {
+    super.setState(fn);
+    widget.onChanged(); // the statement is drawn again for the new period
+  }
 
   void _shift(int d) => setState(() {
         if (r.period == StatementPeriod.year) {
@@ -206,7 +321,7 @@ Future<void> showStatementPrint(BuildContext context, Repo repo, Party party) {
     repo,
     title: 'صورت‌حساب ${party.name}',
     filename: 'صورت‌حساب ${party.name}.pdf',
-    options: _RangePicker(range),
+    options: (c, refresh) => _RangePicker(range, refresh),
     build: (s, f) {
       final (from, to) = range.range;
       return PdfDocs(repo, settings: s).statement(party, from: from, toExclusive: to, periodLabel: range.label, format: f);
@@ -224,7 +339,7 @@ Future<void> printDelivery(BuildContext context, Repo repo, DeliveryDoc doc) {
     title: 'رسید تحویل ${faDigits(doc.number)}',
     filename: 'delivery-${doc.number}.pdf',
     build: (s, f) => PdfDocs(repo, settings: s).delivery(doc, signatures: sign, format: f),
-    options: StatefulBuilder(
+    options: (c, refresh) => StatefulBuilder(
       builder: (c, set) => SwitchListTile(
         contentPadding: EdgeInsets.zero,
         title: const Text('محل مهر و امضای تحویل‌دهنده و تحویل‌گیرنده'),
@@ -232,6 +347,7 @@ Future<void> printDelivery(BuildContext context, Repo repo, DeliveryDoc doc) {
         onChanged: (v) {
           set(() => sign = v);
           repo.setSetting('delivery_sign', v ? '1' : '0');
+          refresh();
         },
       ),
     ),

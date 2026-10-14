@@ -153,7 +153,7 @@ ReportDoc invoicesDoc(List<Invoice> list, Map<String, String> names, {String fil
   );
 }
 
-ReportDoc stockDoc(List<Product> products) {
+ReportDoc stockDoc(List<Product> products, {Map<String, String> groups = const {}}) {
   final value = products.fold<double>(0, (a, p) => a + (p.stock > 0 ? p.stock * p.buyPrice : 0));
   return ReportDoc(
     title: 'گزارش موجودی انبار',
@@ -161,14 +161,14 @@ ReportDoc stockDoc(List<Product> products) {
     summary: [('تعداد کالا', faDigits('${products.length}')), ('ارزش انبار (قیمت خرید)', moneyC(value.round()))],
     tables: [
       ReportTable(
-        headers: const ['کد', 'کالا', 'موجودی', 'قیمت خرید', 'قیمت فروش', 'ارزش'],
-        cols: const [Col.center, Col.text, Col.number, Col.number, Col.number, Col.number],
-        flex: const [0.9, 3, 1.6, 1.6, 1.6, 1.9],
+        headers: [if (groups.isNotEmpty) 'گروه', 'کد', 'کالا', 'موجودی', 'قیمت خرید', 'قیمت فروش', 'ارزش'].toList(),
+        cols: [if (groups.isNotEmpty) Col.text, Col.center, Col.text, Col.number, Col.number, Col.number, Col.number],
+        flex: [if (groups.isNotEmpty) 1.6, 0.9, 3, 1.6, 1.6, 1.6, 1.9],
         rows: [
           for (final p in products)
-            [faDigits(p.code), p.name + (p.low ? ' (کمبود)' : ''), '${_q(p.stock)} ${p.unit}', money(p.buyPrice), money(p.salePrice), money((p.stock > 0 ? p.stock * p.buyPrice : 0).round())],
+            [if (groups.isNotEmpty) groups[p.groupId] ?? '—', faDigits(p.code), p.name + (p.low ? ' (کمبود)' : ''), '${_q(p.stock)} ${p.unit}', money(p.buyPrice), money(p.salePrice), money((p.stock > 0 ? p.stock * p.buyPrice : 0).round())],
         ],
-        totals: ['', 'جمع', '', '', '', money(value.round())],
+        totals: [if (groups.isNotEmpty) '', '', 'جمع', '', '', '', money(value.round())],
       ),
     ],
   );

@@ -205,6 +205,8 @@ void main() {
     final raw = await databaseFactoryFfi.openDatabase(path);
     await raw.execute('DROP TABLE order_items');
     await raw.execute('ALTER TABLE cheques DROP COLUMN order_id'); // added in version 8
+    await raw.execute('DROP TABLE product_groups'); // version 9
+    await raw.execute('ALTER TABLE products DROP COLUMN group_id');
     await raw.execute(
         "INSERT INTO cheques (id, updated_at, deleted, device_id, seq, kind, number, bank, amount, due_date, status)"
         " VALUES ('c1', 1000, 0, 'dev', 4, 'received', '9', 'ملت', 7000, '2025-05-01', 'pending')");
@@ -223,6 +225,7 @@ void main() {
     expect(o.total, 100000);
     final old = (await r.cheques()).single; // existing cheques survive and are not tied to an order
     expect((old.amount, old.orderId), (7000, null));
+    expect(await r.productGroups(), isEmpty); // the newest tables exist after upgrading
     // The new row is picked up by sync (its seq is after the old counter) and has a stable id.
     final rows = (await r.store.changesSince(5))['order_items']!;
     expect(rows.single['id'], 'o1:0');
