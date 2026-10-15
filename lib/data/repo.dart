@@ -801,6 +801,16 @@ class Repo extends ChangeNotifier {
     return r.first['n'] as int;
   }
 
+  /// First free number at or above [wanted] in a numbering series, checked
+  /// inside the save transaction so two writers never take the same number.
+  /// [series] narrows the series (e.g. pro-formas), [wanted] is kept when free.
+  Future<int> _freeNumber(DatabaseExecutor tx, String table, int wanted, {String series = '1=1', List<Object?> args = const []}) async {
+    final taken = await tx.rawQuery('SELECT 1 FROM $table WHERE deleted=0 AND number=? AND $series LIMIT 1', [wanted, ...args]);
+    if (taken.isEmpty && wanted > 0) return wanted;
+    final r = await tx.rawQuery('SELECT COALESCE(MAX(number),0)+1 AS n FROM $table WHERE deleted=0 AND $series', args);
+    return r.first['n'] as int;
+  }
+
   /// Makes a sale invoice from a pro-forma (same party, items, discount and
   /// VAT; dated today) and links the two. Returns the new invoice's id.
   Future<String> convertProforma(String proformaId) async {
@@ -841,6 +851,11 @@ class Repo extends ChangeNotifier {
   }) async {
     final invId = id ?? AppDb.newId();
     await store.db.transaction((tx) async {
+      // A new document takes the number it asked for only if it is still free;
+      // otherwise the next free one (another device may have used it meanwhile).
+      final no = id == null
+          ? await _freeNumber(tx, 'invoices', number, series: "((kind='proforma')=?)", args: [kind == 'proforma' ? 1 : 0])
+          : number;
       // Editing keeps the link between a pro-forma and the invoice made from it.
       final keepRef = id == null ? null : (await tx.query('invoices', columns: ['ref_id'], where: 'id=?', whereArgs: [id])).firstOrNull?['ref_id'];
       // A sale made for an order counts the agreed percent of its total as paid
@@ -862,7 +877,7 @@ class Repo extends ChangeNotifier {
         }
       }
       await store.save('invoices', {
-        'id': invId, 'number': number, 'kind': kind, 'date': date,
+        'id': invId, 'number': no, 'kind': kind, 'date': date,
         'party_id': partyId, 'discount': discount, 'tax_percent': taxPercent, 'note': note, 'ref_id': keepRef,
         'order_id': linked, 'prepaid': prepaid,
       }, exec: tx);
@@ -1014,6 +1029,7 @@ class Repo extends ChangeNotifier {
     if (advance > 0 && accountId == null) throw StateError('حساب دریافت پیش‌دریافت را انتخاب کنید.');
     final oid = id ?? AppDb.newId();
     await store.db.transaction((tx) async {
+      final no = id == null ? await _freeNumber(tx, 'orders', number) : number;
       final old = id == null ? null : (await tx.query('orders', where: 'id=?', whereArgs: [id])).firstOrNull;
       final applied = id == null
           ? 0
@@ -1030,7 +1046,7 @@ class Repo extends ChangeNotifier {
         await store.save('transactions', {
           'id': txId, 'date': date, 'kind': 'receipt', 'amount': advance, 'account_id': accountId,
           'party_id': null, 'category_id': null, 'invoice_id': null,
-          'description': 'پیش‌دریافت سفارش ${faDigits('$number')} - $partyName', 'to_account_id': null,
+          'description': 'پیش‌دریافت سفارش ${faDigits('$no')} - $partyName', 'to_account_id': null,
         }, exec: tx);
       } else if (txId != null) {
         await store.softDelete('transactions', txId, exec: tx);
@@ -1039,7 +1055,7 @@ class Repo extends ChangeNotifier {
       // The order row keeps a short summary of its products (for lists).
       final summary = items.length == 1 ? items.first.title : '${items.first.title} و ${faDigits('${items.length - 1}')} کالای دیگر';
       await store.save('orders', {
-        'id': oid, 'number': number, 'date': date, 'party_id': partyId, 'product_id': null, 'title': summary,
+        'id': oid, 'number': no, 'date': date, 'party_id': partyId, 'product_id': null, 'title': summary,
         'qty': items.fold<double>(0, (a, i) => a + i.qty), 'unit_price': 0, 'advance_percent': percent, 'advance_amount': advance,
         'account_id': accountId, 'tx_id': txId, 'status': old?['status'] ?? 'open', 'released': released,
         'closed_date': old?['closed_date'] ?? '', 'note': note,
@@ -1057,7 +1073,7 @@ class Repo extends ChangeNotifier {
       for (final d in cheques.where((d) => d.amount > 0)) {
         await store.save('cheques', {
           'kind': 'received', 'number': d.number, 'bank': d.bank, 'amount': d.amount, 'due_date': d.dueDate,
-          'party_id': partyId, 'status': 'pending', 'note': 'پیش‌دریافت سفارش ${faDigits('$number')}', 'order_id': oid,
+          'party_id': partyId, 'status': 'pending', 'note': 'پیش‌دریافت سفارش ${faDigits('$no')}', 'order_id': oid,
         }, exec: tx);
       }
     });
@@ -1132,8 +1148,9 @@ class Repo extends ChangeNotifier {
   }) async {
     final did = id ?? AppDb.newId();
     await store.db.transaction((tx) async {
+      final no = id == null ? await _freeNumber(tx, 'deliveries', number) : number;
       await store.save('deliveries', {
-        'id': did, 'number': number, 'date': date, 'party_id': partyId,
+        'id': did, 'number': no, 'date': date, 'party_id': partyId,
         'recipient': recipient, 'address': address, 'note': note,
       }, exec: tx);
       final old = await tx.query('delivery_items',

@@ -429,7 +429,7 @@ class AppDb {
 
   /// Applies rows received from a peer using last-write-wins. Returns the
   /// number of rows that actually changed the local database.
-  Future<int> applyRemote(Map<String, dynamic> data) async {
+  Future<int> applyRemote(Map<String, dynamic> data, {Set<String>? arrived}) async {
     var applied = 0;
     await _raw.transaction((tx) async {
       for (final t in syncTables) {
@@ -451,10 +451,63 @@ class AppDb {
           row['seq'] = await _nextSeq(tx);
           await tx.insert(t, row, conflictAlgorithm: ConflictAlgorithm.replace);
           applied++;
+          arrived?.add(row['id'] as String);
         }
       }
     });
     return applied;
+  }
+
+  /// Gives a new number to documents that ended up with the same number on
+  /// two devices (each numbered offline). Run on the device that coordinates
+  /// the exchange: among the rows sharing a number, the ones already here keep
+  /// it (then the earliest by date), and the rest (those in [arrived] first)
+  /// get the next free numbers of their series. The renumbered rows are normal
+  /// updates, so they travel back to the other device. Returns their count.
+  Future<int> renumberDuplicates(Set<String> arrived) async {
+    var changed = 0;
+    await _raw.transaction((tx) async {
+      for (final t in const ['invoices', 'orders', 'deliveries']) {
+        final rows = await tx.query(t,
+            columns: [if (t == 'invoices') 'kind', 'id', 'number', 'date', 'updated_at'], where: 'deleted=0');
+        String series(Map<String, Object?> r) => t == 'invoices' && r['kind'] == 'proforma' ? 'p' : 's';
+        final groups = <String, List<Map<String, Object?>>>{};
+        final maxNo = <String, int>{};
+        for (final r in rows) {
+          final n = r['number'] as int;
+          groups.putIfAbsent('${series(r)}:$n', () => []).add(r);
+          if (n > (maxNo[series(r)] ?? 0)) maxNo[series(r)] = n;
+        }
+        for (final g in groups.values) {
+          if (g.length < 2) continue;
+          g.sort((a, b) {
+            final aa = arrived.contains(a['id']) ? 1 : 0, bb = arrived.contains(b['id']) ? 1 : 0;
+            if (aa != bb) return aa - bb;
+            final d = (a['date'] as String).compareTo(b['date'] as String);
+            if (d != 0) return d;
+            final u = (a['updated_at'] as int).compareTo(b['updated_at'] as int);
+            return u != 0 ? u : (a['id'] as String).compareTo(b['id'] as String);
+          });
+          for (final r in g.skip(1)) {
+            final k = series(r);
+            final next = (maxNo[k] ?? 0) + 1;
+            maxNo[k] = next;
+            await tx.update(
+                t,
+                {
+                  'number': next,
+                  'updated_at': DateTime.now().toUtc().millisecondsSinceEpoch,
+                  'device_id': deviceId,
+                  'seq': await _nextSeq(tx),
+                },
+                where: 'id=?',
+                whereArgs: [r['id']]);
+            changed++;
+          }
+        }
+      }
+    });
+    return changed;
   }
 }
 

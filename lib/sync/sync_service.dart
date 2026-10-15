@@ -121,10 +121,27 @@ class SyncService {
           // echoed straight back.
           final before = await db.currentSeq();
           final out = await db.changesSince(since);
-          final applied = await db.applyRemote(body['changes'] as Map<String, dynamic>? ?? {});
+          final arrived = <String>{};
+          final applied = await db.applyRemote(body['changes'] as Map<String, dynamic>? ?? {}, arrived: arrived);
+          // This device coordinates the exchange: documents numbered twice
+          // (offline on both sides) get new numbers here, and the renumbered
+          // rows go back in the same reply.
+          final afterApply = await db.currentSeq();
+          final renumbered = await db.renumberDuplicates(arrived);
+          if (renumbered > 0) {
+            final extra = await db.changesSince(afterApply);
+            for (final e in extra.entries) {
+              final list = [...(out[e.key] ?? const <Map<String, Object?>>[])];
+              for (final row in e.value) {
+                list.removeWhere((o) => o['id'] == row['id']);
+                list.add(row);
+              }
+              out[e.key] = list;
+            }
+          }
           return {
             'deviceId': db.deviceId,
-            'seq': await _seqAfterApply(db, before, applied),
+            'seq': await _seqAfterApply(db, before, applied + renumbered),
             'changes': out,
             'applied': applied,
           };
