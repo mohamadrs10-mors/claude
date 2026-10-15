@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../data/access.dart';
 import '../data/company_manager.dart';
+import '../data/guard.dart';
 import '../data/sessions.dart';
 import '../data/user_admin.dart';
 import '../data/users.dart';
@@ -94,7 +95,7 @@ class LocalAuth extends ChangeNotifier {
     }
     _failures.remove(key);
     final role = await store.role(u.roleId);
-    final access = await store.accessOf(u);
+    final access = await store.accessOf(u, device: 'سرور (این سیستم)');
     try {
       _mine[companyId] = sync.sessions.login(
         companyId: companyId, userId: u.id, username: u.username, display: u.display, roleName: role?.name ?? '', access: access,
@@ -105,6 +106,7 @@ class LocalAuth extends ChangeNotifier {
     }
     _applied[companyId] = access;
     await _apply(companyId, access);
+    await logEvent((await companies.repoFor(companyId))!.store.raw, access, 'login', summary: 'ورود به برنامه');
     _timer ??= Timer.periodic(const Duration(seconds: 10), (_) => _beat());
     version++;
     notifyListeners();
@@ -112,8 +114,9 @@ class LocalAuth extends ChangeNotifier {
 
   Future<void> logout(String companyId) async {
     final s = _mine.remove(companyId);
-    _applied.remove(companyId);
+    final was = _applied.remove(companyId);
     if (s != null) sync.sessions.logout(s.token);
+    if (was != null) await logEvent((await companies.repoFor(companyId))!.store.raw, was, 'logout', summary: 'خروج از برنامه');
     await _apply(companyId, Access({})); // nothing may be changed until someone signs in
     if (_mine.isEmpty) _stopTimer();
     version++;

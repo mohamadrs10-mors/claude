@@ -1,6 +1,7 @@
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'access.dart';
+import 'guard.dart';
 
 /// One database call written down as data, so it can be checked against the
 /// user's [Access], sent over the network and run on the other side.
@@ -81,7 +82,7 @@ void checkOp(Access access, Op op) {
 ConflictAlgorithm? _conflict(String? name) => name == null ? null : ConflictAlgorithm.values.firstWhere((c) => c.name == name, orElse: () => ConflictAlgorithm.abort);
 
 /// Runs [op] on [ex] and returns its result (rows or a count).
-Future<Object?> runOp(DatabaseExecutor ex, Op op) async {
+Future<Object?> runOp(DatabaseExecutor ex, Op op) {
   switch (op.kind) {
     case 'query':
       return ex.query(op.table!, distinct: op.distinct, columns: op.columns, where: op.where, whereArgs: op.args, groupBy: op.groupBy, having: op.having, orderBy: op.orderBy, limit: op.limit, offset: op.offset);
@@ -100,10 +101,9 @@ Future<Object?> runOp(DatabaseExecutor ex, Op op) async {
     case 'rawDelete':
       return ex.rawDelete(op.sql!, op.args);
     case 'execute':
-      await ex.execute(op.sql!, op.args);
-      return null;
+      return ex.execute(op.sql!, op.args).then<Object?>((_) => null);
   }
-  throw ArgumentError('unknown operation ${op.kind}');
+  return Future.error(ArgumentError('unknown operation ${op.kind}'));
 }
 
 /// A database whose every call goes through [perform] as an [Op]. The parts of
@@ -121,16 +121,16 @@ abstract class OpExecutor implements DatabaseExecutor {
   Future<List<Map<String, Object?>>> rawQuery(String sql, [List<Object?>? arguments]) async => _rows(await perform(Op('rawQuery', sql: sql, args: arguments)));
 
   @override
-  Future<int> insert(String table, Map<String, Object?> values, {String? nullColumnHack, ConflictAlgorithm? conflictAlgorithm}) async =>
-      (await perform(Op('insert', table: table, values: values, conflict: conflictAlgorithm?.name)) as num).toInt();
+  Future<int> insert(String table, Map<String, Object?> values, {String? nullColumnHack, ConflictAlgorithm? conflictAlgorithm}) =>
+      perform(Op('insert', table: table, values: values, conflict: conflictAlgorithm?.name)).then((r) => (r as num).toInt());
 
   @override
-  Future<int> update(String table, Map<String, Object?> values, {String? where, List<Object?>? whereArgs, ConflictAlgorithm? conflictAlgorithm}) async =>
-      (await perform(Op('update', table: table, values: values, where: where, args: whereArgs, conflict: conflictAlgorithm?.name)) as num).toInt();
+  Future<int> update(String table, Map<String, Object?> values, {String? where, List<Object?>? whereArgs, ConflictAlgorithm? conflictAlgorithm}) =>
+      perform(Op('update', table: table, values: values, where: where, args: whereArgs, conflict: conflictAlgorithm?.name)).then((r) => (r as num).toInt());
 
   @override
-  Future<int> delete(String table, {String? where, List<Object?>? whereArgs}) async =>
-      (await perform(Op('delete', table: table, where: where, args: whereArgs)) as num).toInt();
+  Future<int> delete(String table, {String? where, List<Object?>? whereArgs}) =>
+      perform(Op('delete', table: table, where: where, args: whereArgs)).then((r) => (r as num).toInt());
 
   @override
   Future<int> rawInsert(String sql, [List<Object?>? arguments]) async => (await perform(Op('rawInsert', sql: sql, args: arguments)) as num).toInt();
@@ -150,6 +150,51 @@ abstract class OpExecutor implements DatabaseExecutor {
   dynamic noSuchMethod(Invocation invocation) => throw UnsupportedError('${invocation.memberName} is not supported here');
 }
 
+String? _noLock() => null;
+
+/// Reads go straight to the real executor (after the check that the account
+/// tables are not touched); only writes pass through [guardedRun].
+mixin _FastReads on OpExecutor {
+  DatabaseExecutor get target;
+  Access get access;
+
+  /// The date up to which the books are closed (kept in memory so a write
+  /// costs no extra database call while nothing is closed).
+  String? Function() get lock;
+
+  @override
+  Future<List<Map<String, Object?>>> query(String table, {bool? distinct, List<String>? columns, String? where, List<Object?>? whereArgs, String? groupBy, String? having, String? orderBy, int? limit, int? offset}) {
+    try {
+      checkOp(access, Op('query', table: table, columns: columns, where: where, groupBy: groupBy, having: having, orderBy: orderBy));
+    } catch (e) {
+      return Future.error(e);
+    }
+    return target.query(table, distinct: distinct, columns: columns, where: where, whereArgs: whereArgs, groupBy: groupBy, having: having, orderBy: orderBy, limit: limit, offset: offset);
+  }
+
+  @override
+  Future<List<Map<String, Object?>>> rawQuery(String sql, [List<Object?>? arguments]) {
+    try {
+      checkOp(access, Op('rawQuery', sql: sql));
+    } catch (e) {
+      return Future.error(e);
+    }
+    return target.rawQuery(sql, arguments);
+  }
+}
+
+class _GuardedTransaction extends OpExecutor with _FastReads implements Transaction {
+  _GuardedTransaction(this.target, this.access, this.lock);
+  @override
+  final DatabaseExecutor target;
+  @override
+  final Access access;
+  @override
+  final String? Function() lock;
+  @override
+  Future<Object?> perform(Op op) => guardedRun(target, access, op, lock: lock());
+}
+
 class _OpTransaction extends OpExecutor implements Transaction {
   _OpTransaction(this._perform);
   final Future<Object?> Function(Op) _perform;
@@ -159,23 +204,23 @@ class _OpTransaction extends OpExecutor implements Transaction {
 
 /// A [Database] that forwards to a real one after checking each call against
 /// [access]. Used on this device while a user with a limited role is signed in.
-class GuardedDatabase extends OpExecutor implements Database {
-  GuardedDatabase(this.real, this.access);
+class GuardedDatabase extends OpExecutor with _FastReads implements Database {
+  GuardedDatabase(this.real, this.access, [this.lock = _noLock]);
   final Database real;
+  @override
   final Access access;
+  @override
+  final String? Function() lock;
 
   @override
-  Future<Object?> perform(Op op) {
-    checkOp(access, op);
-    return runOp(real, op);
-  }
+  DatabaseExecutor get target => real;
+
+  @override
+  Future<Object?> perform(Op op) => guardedRun(real, access, op, lock: lock());
 
   @override
   Future<T> transaction<T>(Future<T> Function(Transaction txn) action, {bool? exclusive}) =>
-      real.transaction((tx) => action(_OpTransaction((op) {
-            checkOp(access, op);
-            return runOp(tx, op);
-          })));
+      real.transaction((tx) => action(_GuardedTransaction(tx, access, lock)));
 
   @override
   String get path => real.path;

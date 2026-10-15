@@ -84,13 +84,29 @@ List<Role> presetRoles() {
 /// What the signed-in user may do. [unrestricted] is used when users are not
 /// switched on for the company: everything is allowed.
 class Access {
-  Access(this.perms) : unrestricted = false;
-  const Access.unrestricted()
+  Access(this.perms, {this.who = '', this.userId = '', this.device = ''}) : unrestricted = false;
+  const Access.unrestricted({this.who = '', this.userId = '', this.device = ''})
       : perms = const {},
         unrestricted = true;
 
   final Set<String> perms;
   final bool unrestricted;
+
+  /// Who is acting (shown in the activity log) and on which system.
+  final String who, userId, device;
+
+  /// The same person on system [d]; [readOnly] for a network client.
+  Access forDevice(String d, {bool readOnly = false}) {
+    final a = unrestricted ? Access.unrestricted(who: who, userId: userId, device: d) : Access(perms, who: who, userId: userId, device: d);
+    return readOnly ? a.readOnly() : a;
+  }
+
+  /// The same person with the right to look but not to change anything.
+  Access readOnly() => Access({for (final p in unrestricted ? allPermissions : perms) if (!p.endsWith('.edit') && p != permSettings) p}, who: who, userId: userId, device: device);
+
+  /// The same person limited to changing only the given areas (others: view).
+  Access onlyEditing(Set<String> areas) =>
+      Access({for (final p in perms) if (p == permUsers ? false : (p == permSettings ? false : (!p.endsWith('.edit') || areas.contains(p.split('.').first)))) p}, who: who, userId: userId, device: device);
 
   bool can(String perm) => unrestricted || perms.contains(perm);
   bool canView(String area) => can(permView(area));

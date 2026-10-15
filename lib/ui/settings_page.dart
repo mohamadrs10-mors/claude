@@ -343,6 +343,7 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
             if (canManage) ...[
               gap(16),
+              if (!who.client) ...[PeriodLockSection(repo: repo), gap(16)],
               LogoSection(repo: repo),
               if (!who.client) ...[gap(16), SecuritySection(repo: repo, lock: widget.lock)],
               gap(16),

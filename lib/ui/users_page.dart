@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 
 import '../data/access.dart';
 import '../data/remote_db.dart';
+import '../data/repo.dart';
 import '../data/user_admin.dart';
 import '../util/format.dart';
+import 'activity_tab.dart';
 import 'common.dart';
 
 String _msg(Object e) => e is StateError ? e.message : (e is NetException ? e.message : '$e');
@@ -11,7 +13,10 @@ String _msg(Object e) => e is StateError ? e.message : (e is NetException ? e.me
 /// Users, roles and who is signed in where, for one company. Switching users on
 /// is only offered on the server itself ([onEnable]).
 class UsersPage extends StatefulWidget {
-  const UsersPage({super.key, required this.admin, this.onEnable, this.onDisable, this.currentUserId});
+  const UsersPage({super.key, required this.admin, this.onEnable, this.onDisable, this.currentUserId, this.repo});
+
+  /// For printing the activity report.
+  final Repo? repo;
   final UserAdmin admin;
 
   /// Creates the first user (the administrator) and signs them in; null on a network client.
@@ -34,7 +39,7 @@ class _Data {
 }
 
 class _UsersPageState extends State<UsersPage> with SingleTickerProviderStateMixin {
-  late final TabController tabs = TabController(length: 3, vsync: this);
+  late final TabController tabs = TabController(length: 4, vsync: this);
   late Future<_Data> future = _load();
 
   UserAdmin get admin => widget.admin;
@@ -76,8 +81,8 @@ class _UsersPageState extends State<UsersPage> with SingleTickerProviderStateMix
           if (!d.enabled) return _enableCard(c);
           return Constrained(
             child: Column(children: [
-              TabBar(controller: tabs, tabs: const [Tab(text: 'کاربران'), Tab(text: 'نقش‌ها و دسترسی'), Tab(text: 'نشست‌های فعال')]),
-              Expanded(child: TabBarView(controller: tabs, children: [_usersTab(c, d), _rolesTab(c, d), _sessionsTab(c, d)])),
+              TabBar(controller: tabs, tabs: const [Tab(text: 'کاربران'), Tab(text: 'نقش‌ها و دسترسی'), Tab(text: 'نشست‌های فعال'), Tab(text: 'گزارش فعالیت')]),
+              Expanded(child: TabBarView(controller: tabs, children: [_usersTab(c, d), _rolesTab(c, d), _sessionsTab(c, d), ActivityTab(admin: admin, users: d.users, repo: widget.repo)])),
             ]),
           );
         },

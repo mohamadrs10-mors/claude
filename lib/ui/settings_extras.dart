@@ -4,10 +4,12 @@ import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:shamsi_date/shamsi_date.dart';
 
 import '../data/app_lock.dart';
 import '../data/backup_service.dart';
 import '../data/csv.dart';
+import '../data/guard.dart';
 import '../data/repo.dart';
 import '../util/format.dart';
 import 'common.dart';
@@ -394,4 +396,59 @@ class _SecuritySectionState extends State<SecuritySection> {
           ]),
         ),
       );
+}
+
+/// Closing the books (قفل دورهٔ مالی): documents dated on or before the chosen
+/// day can no longer be created, edited or deleted, by anybody.
+class PeriodLockSection extends StatelessWidget {
+  const PeriodLockSection({super.key, required this.repo});
+  final Repo repo;
+
+  Future<void> _set(BuildContext context, String iso) async {
+    try {
+      await repo.setSetting(lockSettingKey, iso);
+      if (context.mounted) toast(context, iso.isEmpty ? 'قفل دوره برداشته شد.' : 'دوره تا ${faDigits(jalaliText(iso))} بسته شد.');
+    } catch (e) {
+      if (context.mounted) toast(context, '$e');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final lock = repo.setting(lockSettingKey);
+    final lastYearEnd = isoOf(Jalali(Jalali.now().year, 1, 1).toDateTime().subtract(const Duration(days: 1)));
+    return Section(
+      title: 'قفل دورهٔ مالی',
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(
+          lock.isEmpty ? 'هیچ دوره‌ای بسته نیست.' : 'دوره تا ${faDigits(jalaliText(lock))} بسته است.',
+          style: Theme.of(context).textTheme.titleSmall,
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'فاکتور، تراکنش، سفارش و رسید تحویلی که تاریخ آن در دورهٔ بسته باشد دیگر ثبت، ویرایش یا حذف نمی‌شود. '
+          'برای اصلاح یک سند قدیمی، قفل را موقتاً عقب ببرید (این کار در گزارش فعالیت ثبت می‌شود).',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        const SizedBox(height: 12),
+        Wrap(spacing: 8, runSpacing: 8, children: [
+          FilledButton.tonalIcon(
+            icon: const Icon(Icons.lock_clock),
+            label: const Text('بستن تا پایان سال قبل'),
+            onPressed: () => _set(context, lastYearEnd),
+          ),
+          OutlinedButton.icon(
+            icon: const Icon(Icons.event),
+            label: const Text('انتخاب تاریخ...'),
+            onPressed: () async {
+              final r = await showDialog<String>(context: context, builder: (_) => JalaliPickerDialog(lock.isEmpty ? todayIso() : lock));
+              if (r != null && context.mounted) await _set(context, r);
+            },
+          ),
+          if (lock.isNotEmpty)
+            TextButton.icon(icon: const Icon(Icons.lock_open), label: const Text('برداشتن قفل'), onPressed: () => _set(context, '')),
+        ]),
+      ]),
+    );
+  }
 }

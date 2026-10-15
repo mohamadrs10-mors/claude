@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import 'access.dart';
+import 'guard.dart';
 import 'app_db_remote.dart';
 import 'device_prefs.dart';
 import 'remote_db.dart';
@@ -186,4 +187,12 @@ class RemoteUserAdmin implements UserAdmin {
 
   @override
   Future<void> kick(String userId) async => _call('kick', {'userId': userId});
+
+  @override
+  Future<List<AuditEntry>> audit({String? userId, String? action, String? table, String? from, String? to, String? text, int limit = 300, int offset = 0}) async => [
+        for (final e in (await _call('audit', {
+          'filter': {'userId': userId, 'action': action, 'table': table, 'from': from, 'to': to, 'text': text, 'limit': limit, 'offset': offset}
+        }))['entries'] as List)
+          AuditEntry.fromJson(Map<String, dynamic>.from(e as Map))
+      ];
 }

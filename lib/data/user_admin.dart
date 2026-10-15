@@ -1,4 +1,5 @@
 import 'access.dart';
+import 'guard.dart';
 import 'sessions.dart';
 import 'users.dart';
 
@@ -43,6 +44,9 @@ abstract class UserAdmin {
 
   /// Signs the user out everywhere.
   Future<void> kick(String userId);
+
+  /// The activity log, newest first.
+  Future<List<AuditEntry>> audit({String? userId, String? action, String? table, String? from, String? to, String? text, int limit = 300, int offset = 0});
 }
 
 class LocalUserAdmin implements UserAdmin {
@@ -107,4 +111,8 @@ class LocalUserAdmin implements UserAdmin {
   Future<void> kick(String userId) async {
     manager.kick(companyId, userId);
   }
+
+  @override
+  Future<List<AuditEntry>> audit({String? userId, String? action, String? table, String? from, String? to, String? text, int limit = 300, int offset = 0}) =>
+      readAudit(store.store.raw, userId: userId, action: action, table: table, fromIso: from, toIso: to, text: text, limit: limit, offset: offset);
 }

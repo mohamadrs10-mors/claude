@@ -155,5 +155,6 @@ class UserStore {
     return _hash(r['salt'] as String, password) == r['hash'] ? _user(r) : null;
   }
 
-  Future<Access> accessOf(User u) async => Access((await role(u.roleId))?.perms ?? {});
+  Future<Access> accessOf(User u, {String device = ''}) async =>
+      Access((await role(u.roleId))?.perms ?? {}, who: u.fullName.isEmpty ? u.username : u.fullName, userId: u.id, device: device);
 }

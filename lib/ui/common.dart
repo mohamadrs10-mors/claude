@@ -82,7 +82,7 @@ class JalaliDateField extends StatelessWidget {
   @override
   Widget build(BuildContext context) => InkWell(
         onTap: () async {
-          final r = await showDialog<String>(context: context, builder: (_) => _JalaliPicker(iso));
+          final r = await showDialog<String>(context: context, builder: (_) => JalaliPickerDialog(iso));
           if (r != null) onChanged(r);
         },
         child: InputDecorator(
@@ -92,14 +92,15 @@ class JalaliDateField extends StatelessWidget {
       );
 }
 
-class _JalaliPicker extends StatefulWidget {
-  const _JalaliPicker(this.iso);
+/// The Jalali date dialog; pops the chosen ISO date.
+class JalaliPickerDialog extends StatefulWidget {
+  const JalaliPickerDialog(this.iso, {super.key});
   final String iso;
   @override
-  State<_JalaliPicker> createState() => _JalaliPickerState();
+  State<JalaliPickerDialog> createState() => _JalaliPickerState();
 }
 
-class _JalaliPickerState extends State<_JalaliPicker> {
+class _JalaliPickerState extends State<JalaliPickerDialog> {
   late Jalali j = Jalali.fromDateTime(DateTime.parse(widget.iso));
 
   @override

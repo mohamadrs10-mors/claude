@@ -138,7 +138,7 @@ class SessionManager extends ChangeNotifier {
         _byToken.remove(s.token);
         _ended[s.token] = 'removed';
       } else {
-        s.access = a;
+        s.access = a.forDevice(s.deviceName, readOnly: !s.local);
       }
     }
     notifyListeners();

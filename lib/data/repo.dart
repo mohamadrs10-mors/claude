@@ -494,6 +494,8 @@ class Repo extends ChangeNotifier {
   Future<void> _loadSettings() async {
     final rows = await store.db.query('settings', where: 'deleted=0');
     settings = {for (final r in rows) r['id'] as String: r['value'] as String};
+    final lock = (settings['lock_until'] ?? '').trim();
+    store.lockUntil = lock.isEmpty ? null : lock;
     currencyLabel = settings['currency'] ?? 'تومان';
     thousandsSep = settings['thousands_sep'] == ',' ? ',' : '.';
   }

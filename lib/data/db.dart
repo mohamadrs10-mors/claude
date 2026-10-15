@@ -29,7 +29,7 @@ const syncTables = [
   'product_groups',
 ];
 
-const _schemaVersion = 10;
+const _schemaVersion = 11;
 
 const _v2Tables = [
   '''CREATE TABLE products (
@@ -121,6 +121,16 @@ const _v10Tables = [
     salt TEXT NOT NULL, hash TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT '')''',
 ];
 
+/// Who did what (گزارش فعالیت کاربران). Local to the system that holds the
+/// data: not synced and not part of the JSON backups.
+const _v11Tables = [
+  '''CREATE TABLE audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, user_id TEXT NOT NULL DEFAULT '',
+    user_name TEXT NOT NULL DEFAULT '', device TEXT NOT NULL DEFAULT '', action TEXT NOT NULL,
+    tbl TEXT NOT NULL DEFAULT '', row_id TEXT NOT NULL DEFAULT '', summary TEXT NOT NULL DEFAULT '')''',
+  'CREATE INDEX idx_audit_at ON audit_log(at)',
+];
+
 /// Product groups (گروه کالایی): every product can belong to one group.
 const _v9Tables = [
   '''CREATE TABLE product_groups (
@@ -206,6 +216,7 @@ final _schema = [
   ..._migrate7to8,
   ..._migrate8to9,
   ..._v10Tables,
+  ..._v11Tables,
   ..._v3Tables,
   ..._v5Tables,
   ..._v6Tables,
@@ -251,8 +262,17 @@ Future<void> _orderItemsFromOrders(Database db) async {
 /// Thin wrapper around the SQLite database that stamps every write with the
 /// metadata needed for sync (updated_at, device_id and a local change counter).
 class AppDb {
-  AppDb._(this._raw, this.deviceId);
+  AppDb._(this._raw, this.deviceId, {bool guard = false}) {
+    // A local database always goes through the guard (period lock, activity
+    // log); a remote one is guarded by the server it talks to.
+    if (guard) _guarded = GuardedDatabase(_raw, const Access.unrestricted(), () => lockUntil);
+    _guardLocal = guard;
+  }
 
+  late final bool _guardLocal;
+
+  /// The closed-until date (setting `lock_until`); the Repo keeps it current.
+  String? lockUntil;
   final Database _raw;
   Database? _guarded;
   final String deviceId;
@@ -267,7 +287,9 @@ class AppDb {
 
   /// Limits (or, with null, frees) what the screens may change on this device.
   void setAccess(Access? access) {
-    _guarded = access == null || access.unrestricted ? null : GuardedDatabase(_raw, access);
+    _guarded = access == null || access.unrestricted
+        ? (_guardLocal ? GuardedDatabase(_raw, access ?? const Access.unrestricted(), () => lockUntil) : null)
+        : GuardedDatabase(_raw, access, () => lockUntil);
   }
 
   /// Wraps an already open database, such as the network one of a client.
@@ -337,6 +359,11 @@ class AppDb {
               await db.execute(q);
             }
           }
+          if (from < 11) {
+            for (final q in _v11Tables) {
+              await db.execute(q);
+            }
+          }
         },
         onCreate: (db, _) async {
           for (final s in _schema) {
@@ -348,7 +375,7 @@ class AppDb {
       ),
     );
     final rows = await db.query('meta', where: "key='device_id'");
-    return AppDb._(db, rows.first['value'] as String);
+    return AppDb._(db, rows.first['value'] as String, guard: true);
   }
 
   Future<void> close() => _raw.close();
@@ -429,13 +456,18 @@ class AppDb {
 
   /// Applies rows received from a peer using last-write-wins. Returns the
   /// number of rows that actually changed the local database.
-  Future<int> applyRemote(Map<String, dynamic> data, {Set<String>? arrived}) async {
+  Future<int> applyRemote(Map<String, dynamic> data,
+      {Set<String>? arrived, bool Function(String table, Map<String, Object?> row)? accept, void Function(String table, Map<String, Object?> row)? onReject}) async {
     var applied = 0;
     await _raw.transaction((tx) async {
       for (final t in syncTables) {
         final list = (data[t] as List?) ?? const [];
         for (final raw in list) {
           final row = Map<String, Object?>.from(raw as Map)..remove('seq');
+          if (accept != null && !accept(t, row)) {
+            onReject?.call(t, row);
+            continue;
+          }
           final cur = await tx.query(t,
               columns: ['updated_at', 'device_id'],
               where: 'id=?',

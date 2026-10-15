@@ -270,6 +270,7 @@ class _HomePageState extends State<HomePage> {
     return UsersPage(
       key: ValueKey('users${who.userId}'),
       admin: who.admin!,
+      repo: repo,
       currentUserId: who.userId.isEmpty ? null : who.userId,
       onEnable: !local
           ? null
