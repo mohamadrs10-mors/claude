@@ -4,6 +4,7 @@ import '../data/repo.dart';
 import '../print/pdf_docs.dart';
 import '../print/report_builders.dart';
 import '../util/format.dart';
+import 'auth.dart';
 import 'common.dart';
 import 'parties_page.dart';
 import '../print/delivery_doc.dart';
@@ -81,7 +82,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
                 ),
             ]),
           ),
-          floatingActionButton: FloatingActionButton.extended(
+          floatingActionButton: !AccessScope.of(context).canEdit('invoices') ? null : FloatingActionButton.extended(
             onPressed: () => openInvoiceEditor(c, repo),
             icon: const Icon(Icons.add),
             label: const Text('فاکتور جدید'),

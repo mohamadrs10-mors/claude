@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../data/repo.dart';
 import '../util/format.dart';
+import 'auth.dart';
 import 'common.dart';
 import 'invoices_page.dart';
 import 'parties_page.dart';
@@ -60,7 +61,7 @@ class OrdersPage extends StatelessWidget {
                   ),
               ]),
             ),
-            floatingActionButton: FloatingActionButton.extended(
+            floatingActionButton: !AccessScope.of(context).canEdit('orders') ? null : FloatingActionButton.extended(
               onPressed: () => openOrderEditor(c, repo),
               icon: const Icon(Icons.add),
               label: const Text('سفارش جدید'),

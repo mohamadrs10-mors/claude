@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../data/repo.dart';
 import '../util/format.dart';
 import '../print/report_builders.dart';
+import 'auth.dart';
 import 'common.dart';
 import 'print_dialog.dart';
 import 'costing_page.dart';
@@ -113,7 +114,7 @@ class _ProductsPageState extends State<ProductsPage> {
                   ],
               ]),
             ),
-            floatingActionButton: FloatingActionButton.extended(
+            floatingActionButton: !AccessScope.of(context).canEdit('products') ? null : FloatingActionButton.extended(
               onPressed: () => editProduct(c, widget.repo, presetGroup: gid == '' ? null : gid),
               icon: const Icon(Icons.add),
               label: const Text('کالای جدید'),

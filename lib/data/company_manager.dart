@@ -76,6 +76,17 @@ class CompanyManager extends ChangeNotifier {
     return m;
   }
 
+  /// A manager for the one company a network client works on. Its data lives on
+  /// the server behind [repo]; [dir] is where this device keeps its local files
+  /// (backups of the company are written there).
+  static CompanyManager remote({required Repo repo, required String id, required String name, required DevicePrefs prefs, required Directory dir}) {
+    final m = CompanyManager._(dir, prefs, null);
+    m.companies.add(CompanyInfo(id, name, '', ''));
+    m._open[id] = repo;
+    m.activeId = id;
+    return m;
+  }
+
   // ---- legacy -------------------------------------------------------------
 
   /// Versions before 1.5 had a single `accounting.db`: it becomes the first

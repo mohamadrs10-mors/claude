@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../data/repo.dart';
 import '../util/format.dart';
 import '../print/report_builders.dart';
+import 'auth.dart';
 import 'common.dart';
 import 'print_dialog.dart';
 
@@ -54,7 +55,7 @@ class _ChequesPageState extends State<ChequesPage> with SingleTickerProviderStat
                 ),
               ]),
             ),
-            floatingActionButton: FloatingActionButton.extended(
+            floatingActionButton: !AccessScope.of(context).canEdit('cheques') ? null : FloatingActionButton.extended(
               onPressed: () => editCheque(c, widget.repo, kind: tabs.index == 0 ? 'received' : 'issued'),
               icon: const Icon(Icons.add),
               label: const Text('چک جدید'),

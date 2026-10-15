@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../data/repo.dart';
 import '../print/delivery_doc.dart';
 import '../util/format.dart';
+import 'auth.dart';
 import 'common.dart';
 import 'parties_page.dart';
 import 'print_dialog.dart';
@@ -77,7 +78,7 @@ class _DeliveriesPageState extends State<DeliveriesPage> {
                 ),
             ]),
           ),
-          floatingActionButton: FloatingActionButton.extended(
+          floatingActionButton: !AccessScope.of(context).canEdit('deliveries') ? null : FloatingActionButton.extended(
             onPressed: () => openDeliveryEditor(c, repo),
             icon: const Icon(Icons.add),
             label: const Text('رسید تحویل جدید'),

@@ -7,6 +7,8 @@ import '../util/format.dart';
 import 'app_theme.dart';
 import '../print/print_settings.dart';
 import '../print/report_doc.dart';
+import '../data/access.dart';
+import 'auth.dart';
 import 'common.dart';
 import 'print_dialog.dart';
 import 'settings_extras.dart';
@@ -97,7 +99,10 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   Widget build(BuildContext context) => ListenableBuilder(
         listenable: theme,
-        builder: (context, _) => Constrained(
+        builder: (context, _) {
+          final who = AccessScope.of(context);
+          final canManage = who.can(permSettings);
+          return Constrained(
           maxWidth: 760,
           child: ListView(padding: const EdgeInsets.fromLTRB(16, 8, 16, 32), children: [
             Section(title: 'ظاهر برنامه', child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -172,6 +177,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 onChanged: theme.setCompact,
               ),
             ])),
+            if (canManage) ...[
             gap(16),
             Section(title: 'واحد پول و نمایش مبلغ', child: ListenableBuilder(
               listenable: repo,
@@ -235,6 +241,7 @@ class _SettingsPageState extends State<SettingsPage> {
               const SizedBox(height: 4),
               Text('این اطلاعات با دستگاه دیگر هم همگام می‌شود.', style: Theme.of(context).textTheme.bodySmall),
             ])),
+            ],
             gap(16),
             ListenableBuilder(
               listenable: repo,
@@ -334,17 +341,19 @@ class _SettingsPageState extends State<SettingsPage> {
                 ]));
               },
             ),
+            if (canManage) ...[
+              gap(16),
+              LogoSection(repo: repo),
+              if (!who.client) ...[gap(16), SecuritySection(repo: repo, lock: widget.lock)],
+              gap(16),
+              BackupSection(repo: repo, backups: widget.backups),
+              gap(16),
+              CsvSection(repo: repo),
+            ],
             gap(16),
-            LogoSection(repo: repo),
-            gap(16),
-            SecuritySection(repo: repo, lock: widget.lock),
-            gap(16),
-            BackupSection(repo: repo, backups: widget.backups),
-            gap(16),
-            CsvSection(repo: repo),
-            gap(16),
-            const Section(title: 'دربارهٔ برنامه', child: Text('MORS ACC • نسخهٔ ۱٫۱۱\nفونت وزیرمتن (مجوز OFL)')),
+            const Section(title: 'دربارهٔ برنامه', child: Text('MORS ACC • نسخهٔ ۱٫۱۳\nفونت وزیرمتن (مجوز OFL)')),
           ]),
-        ),
+        );
+        },
       );
 }

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../data/repo.dart';
 import '../util/format.dart';
 import '../print/report_builders.dart';
+import 'auth.dart';
 import 'common.dart';
 import 'print_dialog.dart';
 
@@ -86,7 +87,7 @@ class _TransactionsPageState extends State<TransactionsPage> {
                   ),
           ),
         ])),
-        floatingActionButton: FloatingActionButton.extended(
+        floatingActionButton: !AccessScope.of(context).canEdit('transactions') ? null : FloatingActionButton.extended(
           onPressed: () => editTx(c, repo),
           icon: const Icon(Icons.add),
           label: const Text('تراکنش جدید'),

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../data/repo.dart';
 import '../util/format.dart';
+import 'auth.dart';
 import 'common.dart';
 import 'print_dialog.dart';
 import 'invoices_page.dart';
@@ -63,7 +64,7 @@ class _PartiesPageState extends State<PartiesPage> {
                 ),
             ]),
           ),
-          floatingActionButton: FloatingActionButton.extended(
+          floatingActionButton: !AccessScope.of(context).canEdit('parties') ? null : FloatingActionButton.extended(
             onPressed: () => editParty(c, repo),
             icon: const Icon(Icons.person_add_alt),
             label: const Text('شخص جدید'),
