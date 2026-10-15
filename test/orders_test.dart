@@ -214,6 +214,10 @@ void main() {
     await raw.execute('ALTER TABLE invoices DROP COLUMN warehouse_id');
     await raw.execute('ALTER TABLE products DROP COLUMN usd_sale'); // version 13
     await raw.execute('ALTER TABLE products DROP COLUMN usd_buy');
+    for (final i in ['idx_invoices_party_date', 'idx_invoices_date', 'idx_tx_account', 'idx_tx_invoice', 'idx_cheques_status_due']) {
+      await raw.execute('DROP INDEX IF EXISTS $i'); // version 14
+    }
+    await raw.execute('ALTER TABLE invoices DROP COLUMN due_date');
     await raw.execute('ALTER TABLE products DROP COLUMN group_id');
     await raw.execute(
         "INSERT INTO cheques (id, updated_at, deleted, device_id, seq, kind, number, bank, amount, due_date, status)"

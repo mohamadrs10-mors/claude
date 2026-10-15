@@ -244,11 +244,17 @@ class StockMove {
 
 class Invoice {
   Invoice(this.id, this.number, this.kind, this.date, this.partyId, this.discount,
-      this.note, this.subtotal, this.paid, this.taxPercent, [this.refId, this.orderId, this.prepaid = 0, this.warehouseId]);
+      this.note, this.subtotal, this.paid, this.taxPercent, [this.refId, this.orderId, this.prepaid = 0, this.warehouseId, this.dueDate]);
   final String id, kind, date, partyId, note;
 
   /// The warehouse the goods come from / go to (null: the main one).
   final String? warehouseId;
+
+  /// Agreed payment date (null: none given).
+  final String? dueDate;
+
+  /// A sale/purchase-type invoice that is still unpaid after its due date.
+  bool overdueAt(String todayIso) => kind != 'proforma' && dueDate != null && dueDate!.compareTo(todayIso) < 0 && remaining > 0;
 
   /// The order (with an advance payment) this sale invoice was made for.
   final String? orderId;
@@ -478,6 +484,7 @@ class Dashboard {
     required this.months,
     required this.lowStock,
     required this.dueCheques,
+    required this.overdue,
     required this.recent,
     required this.names,
   });
@@ -487,6 +494,9 @@ class Dashboard {
   final List<(String, int, int)> months;
   final List<Product> lowStock;
   final List<Cheque> dueCheques;
+
+  /// Unpaid invoices past their due date, oldest due date first.
+  final List<Invoice> overdue;
   final List<Tx> recent;
   final Map<String, String> names; // party/account id -> name
 }
@@ -1000,7 +1010,7 @@ class Repo extends ChangeNotifier {
         Invoice(r['id'] as String, r['number'] as int, r['kind'] as String, r['date'] as String,
             r['party_id'] as String, r['discount'] as int, r['note'] as String,
             (r['subtotal'] as num).round(), (r['paid'] as num).round(), r['tax_percent'] as int, r['ref_id'] as String?,
-            r['order_id'] as String?, r['prepaid'] as int, r['warehouse_id'] as String?)
+            r['order_id'] as String?, r['prepaid'] as int, r['warehouse_id'] as String?, r['due_date'] as String?)
     ];
   }
 
@@ -1049,6 +1059,7 @@ class Repo extends ChangeNotifier {
       note: pro.note,
       items: items,
       warehouseId: pro.warehouseId,
+      dueDate: null,
     );
     await store.save('invoices', {
       ...(await store.db.query('invoices', where: 'id=?', whereArgs: [proformaId])).first,
@@ -1071,6 +1082,7 @@ class Repo extends ChangeNotifier {
     required List<InvoiceItem> items,
     String? orderId,
     String? warehouseId,
+    String? dueDate,
   }) async {
     final invId = id ?? AppDb.newId();
     await store.db.transaction((tx) async {
@@ -1104,6 +1116,7 @@ class Repo extends ChangeNotifier {
         'party_id': partyId, 'discount': discount, 'tax_percent': taxPercent, 'note': note, 'ref_id': keepRef,
         'order_id': linked, 'prepaid': prepaid,
         'warehouse_id': warehouseId == mainWarehouseId ? null : warehouseId,
+        'due_date': kind == 'proforma' ? null : dueDate,
       }, exec: tx);
       final old = await tx.query('invoice_items',
           columns: ['id'], where: 'invoice_id=? AND deleted=0', whereArgs: [invId]);
@@ -1975,6 +1988,12 @@ class Repo extends ChangeNotifier {
     return Ledger(opening, lines, lines.isEmpty ? opening : lines.last.balance);
   }
 
+  /// Unpaid invoices whose due date has passed, oldest due date first.
+  Future<List<Invoice>> overdueInvoices() async {
+    final today = todayIso();
+    return [for (final i in await invoices()) if (i.overdueAt(today)) i]..sort((a, b) => a.dueDate!.compareTo(b.dueDate!));
+  }
+
   Future<Dashboard> dashboard() async {
     final accs = await accounts();
     final parts = await parties();
@@ -2004,6 +2023,7 @@ class Repo extends ChangeNotifier {
       months: months,
       lowStock: (await products()).where((p) => p.low).toList(),
       dueCheques: pending.where((c) => c.dueDate.compareTo(soon) <= 0).toList(),
+      overdue: await overdueInvoices(),
       recent: await transactions(limit: 6),
       names: {for (final p in parts) p.id: p.name, for (final a in accs) a.id: a.name},
     );

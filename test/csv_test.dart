@@ -104,7 +104,7 @@ void main() {
 
       expect((await r.exportRows('parties'))[1].first, 'شخص');
       expect((await r.exportRows('transactions')).length, 1); // header only
-      expect((await r.exportRows('invoices')).first.length, 10);
+      expect((await r.exportRows('invoices')).first.length, 11);
       expect(() => r.exportRows('nope'), throwsArgumentError);
     });
   });

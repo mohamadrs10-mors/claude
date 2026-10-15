@@ -54,3 +54,18 @@ jobs:
         with:
           name: accounting-windows
           path: build/windows/x64/runner/Release/
+      # A one-file installer (Inno Setup). Optional: if it fails the zip above is still published.
+      - name: Build installer
+        id: installer
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          $v = (Select-String -Path pubspec.yaml -Pattern '^version:\s*(\S+)').Matches[0].Groups[1].Value
+          $env:APP_VERSION = ($v -split '\+')[0]
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" windows\installer\mors_acc.iss
+      - uses: actions/upload-artifact@v4
+        if: steps.installer.outcome == 'success'
+        with:
+          name: accounting-windows-setup
+          path: build/installer/MORS-ACC-Setup.exe

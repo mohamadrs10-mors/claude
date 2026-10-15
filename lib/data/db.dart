@@ -31,7 +31,7 @@ const syncTables = [
   'stock_moves',
 ];
 
-const _schemaVersion = 13;
+const _schemaVersion = 14;
 
 const _v2Tables = [
   '''CREATE TABLE products (
@@ -121,6 +121,17 @@ const _v10Tables = [
   '''CREATE TABLE users (
     id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE, full_name TEXT NOT NULL DEFAULT '', role_id TEXT NOT NULL,
     salt TEXT NOT NULL, hash TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT '')''',
+];
+
+/// Payment due date of an invoice (سررسید) and indexes that keep lists and
+/// reports fast with many documents.
+const _v14Tables = [
+  'ALTER TABLE invoices ADD COLUMN due_date TEXT',
+  'CREATE INDEX IF NOT EXISTS idx_invoices_party_date ON invoices(party_id, date)',
+  'CREATE INDEX IF NOT EXISTS idx_invoices_date ON invoices(date)',
+  'CREATE INDEX IF NOT EXISTS idx_tx_account ON transactions(account_id)',
+  'CREATE INDEX IF NOT EXISTS idx_tx_invoice ON transactions(invoice_id)',
+  'CREATE INDEX IF NOT EXISTS idx_cheques_status_due ON cheques(status, due_date)',
 ];
 
 /// Dollar prices (قیمت ارزی): a product can carry its price in dollars; the
@@ -262,6 +273,7 @@ final _schema = [
   'CREATE INDEX idx_items_inv ON invoice_items(invoice_id)',
   for (final t in syncTables)
     if (!const {'deliveries', 'delivery_items', 'orders', 'order_items', 'product_groups', 'warehouses', 'stock_moves'}.contains(t)) 'CREATE INDEX idx_${t}_seq ON $t(seq)',
+  ..._v14Tables, // after the tables its indexes belong to
 ];
 
 /// Orders made before orders could hold several products have one product in
@@ -402,6 +414,16 @@ class AppDb {
           if (from < 13) {
             for (final q in _v13Tables) {
               await db.execute(q);
+            }
+          }
+          if (from < 14) {
+            for (final q in _v14Tables) {
+              try {
+                await db.execute(q);
+              } catch (_) {
+                // An index is only a speed-up; never let it stop an upgrade.
+                if (!q.startsWith('CREATE INDEX')) rethrow;
+              }
             }
           }
         },

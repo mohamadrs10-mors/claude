@@ -101,14 +101,15 @@ class _InvoicesPageState extends State<InvoicesPage> {
         child: Text(faDigits('${inv.number}'), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
       ),
       title: Text('${inv.info.label} • ${names[inv.partyId] ?? '؟'}', style: const TextStyle(fontWeight: FontWeight.w600)),
-      subtitle: Text(jalaliText(inv.date)),
+      subtitle: Text(inv.dueDate == null || inv.kind == 'proforma' ? jalaliText(inv.date) : '${jalaliText(inv.date)} • سررسید ${faDigits(jalaliText(inv.dueDate!))}'),
       trailing: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.end, children: [
         Text(money(inv.total), style: const TextStyle(fontWeight: FontWeight.w700)),
         const SizedBox(height: 4),
         if (inv.kind == 'proforma')
           StatusChip(inv.refId != null ? 'تبدیل شده' : 'پیش‌فاکتور', inv.refId != null ? Colors.green.shade700 : Colors.blueGrey)
         else
-          StatusChip(settled ? 'تسویه شده' : 'مانده ${money(inv.remaining)}', settled ? Colors.green.shade700 : Colors.orange.shade800),
+          StatusChip(settled ? 'تسویه شده' : (inv.overdueAt(todayIso()) ? 'سررسید گذشته • مانده ${money(inv.remaining)}' : 'مانده ${money(inv.remaining)}'),
+              settled ? Colors.green.shade700 : (inv.overdueAt(todayIso()) ? Colors.red.shade700 : Colors.orange.shade800)),
       ]),
       onTap: () => Navigator.push(c, MaterialPageRoute(builder: (_) => InvoiceViewPage(repo: widget.repo, invoiceId: inv.id))),
     );
@@ -364,6 +365,7 @@ class _InvoiceEditPageState extends State<InvoiceEditPage> {
   Map<String, double> originalQty = {};
   List<Order> orders = [];
   String? orderId, originalOrderId;
+  String? dueDate;
   List<Warehouse> warehouses = [];
   String warehouseId = mainWarehouseId, originalWarehouse = mainWarehouseId;
   Map<String, double> whStock = {};
@@ -396,6 +398,7 @@ class _InvoiceEditPageState extends State<InvoiceEditPage> {
     if (widget.invoiceId != null) {
       final inv = (await repo.invoices()).firstWhere((i) => i.id == widget.invoiceId);
       warehouseId = inv.warehouseId ?? mainWarehouseId;
+      dueDate = inv.dueDate;
       originalWarehouse = warehouseId;
       kind = inv.kind;
       originalKind = inv.kind;
@@ -594,6 +597,10 @@ class _InvoiceEditPageState extends State<InvoiceEditPage> {
                   icon: const Icon(Icons.person_add_alt),
                 ),
               ]),
+              if (kind != 'proforma') ...[
+                gap(),
+                _dueRow(context),
+              ],
               if (kind == 'sale' && orders.isNotEmpty) ...[
                 gap(),
                 DropdownButtonFormField<String?>(
@@ -805,6 +812,24 @@ class _InvoiceEditPageState extends State<InvoiceEditPage> {
     );
   }
 
+  /// Optional agreed payment date, with quick choices counted from the invoice date.
+  Widget _dueRow(BuildContext context) => Wrap(spacing: 8, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+        OutlinedButton.icon(
+          icon: const Icon(Icons.event_available_outlined),
+          label: Text(dueDate == null ? 'سررسید پرداخت (اختیاری)' : 'سررسید: ${faDigits(jalaliText(dueDate!))}'),
+          onPressed: () async {
+            final r = await showDialog<String>(context: context, builder: (_) => JalaliPickerDialog(dueDate ?? date));
+            if (r != null) setState(() => dueDate = r);
+          },
+        ),
+        for (final d in const [7, 15, 30, 60])
+          ActionChip(
+            label: Text('${faDigits('$d')} روز بعد'),
+            onPressed: () => setState(() => dueDate = isoOf(DateTime.parse(date).add(Duration(days: d)))),
+          ),
+        if (dueDate != null) IconButton(tooltip: 'حذف سررسید', icon: const Icon(Icons.close), onPressed: () => setState(() => dueDate = null)),
+      ]);
+
   Future<void> _save() async {
     if (!key.currentState!.validate()) return;
     await repo.saveInvoice(
@@ -821,6 +846,7 @@ class _InvoiceEditPageState extends State<InvoiceEditPage> {
       ],
       orderId: kind == 'sale' ? orderId : null,
       warehouseId: warehouseId,
+      dueDate: kind == 'proforma' ? null : dueDate,
     );
     if (mounted) Navigator.pop(context);
   }

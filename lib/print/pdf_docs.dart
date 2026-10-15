@@ -299,6 +299,7 @@ class PdfDocs {
     final showLogo = repo.setting('invoice_logo', '1') != '0';
     final rowNo = repo.setting('invoice_rownum', '1') != '0';
     final sign = repo.setting('invoice_signatures', '1') != '0';
+    final qr = repo.setting('invoice_qr', '0') == '1';
     final whs = await repo.warehouses();
     final wh = whs.length > 1 ? whs.where((w) => w.id == (inv.warehouseId ?? mainWarehouseId)).firstOrNull?.name : null;
     final logo = showLogo ? _logo : null;
@@ -332,6 +333,7 @@ class PdfDocs {
       _text(info.label, size: compact ? 13 : 17, bold: true, color: tpl == 'classic' ? PdfColors.white : (tpl == 'modern' ? accent : null)),
       _text('شماره: ${faDigits('${inv.number}')}', color: tpl == 'classic' ? PdfColors.white : null),
       _text('تاریخ: ${jalaliText(inv.date)}', color: tpl == 'classic' ? PdfColors.white : null),
+      if (inv.dueDate != null && inv.kind != 'proforma') _text('سررسید: ${jalaliText(inv.dueDate!)}', size: 9, color: tpl == 'classic' ? PdfColors.white : null),
       if (wh != null) _text('انبار: $wh', size: 9, color: tpl == 'classic' ? PdfColors.white : null),
     ];
     final onHead = tpl == 'classic' ? PdfColors.white : null;
@@ -436,6 +438,20 @@ class PdfDocs {
             pw.SizedBox(width: 14),
             totalsBox,
           ]),
+        if (qr) ...[
+          pw.SizedBox(height: 8),
+          pw.Row(children: [
+            pw.BarcodeWidget(
+              barcode: pw.Barcode.qrCode(),
+              data: 'MORS|$_business|${info.label}|${inv.number}|${inv.date}|${inv.total}|${party?.name ?? ''}',
+              width: 62,
+              height: 62,
+              drawText: false,
+            ),
+            pw.SizedBox(width: 8),
+            _text('کد QR: مشخصات و مبلغ این فاکتور', size: 8, color: PdfColors.grey700),
+          ]),
+        ],
         if (sign) ...[
           pw.SizedBox(height: compact ? 16 : 30),
           pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceAround, children: [
@@ -448,6 +464,47 @@ class PdfDocs {
           pw.Center(child: _text(footer, size: 9, color: PdfColors.grey700)),
         ],
       ],
+    ));
+    return doc.save();
+  }
+
+  // ---- barcode labels -----------------------------------------------------
+
+  /// A sheet of product labels: name, price and a Code 128 barcode of the
+  /// product code, [columns] labels across. Products without a plain
+  /// (letters and digits) code show the code as text instead.
+  Future<Uint8List> labels(List<Product> products, {int columns = 3, bool showPrice = true, PdfPageFormat? format}) async {
+    final doc = pw.Document(title: 'برچسب بارکد', author: _business);
+    final theme = await _theme();
+    final fmt = format ?? s.format;
+    final usable = fmt.width - 2 * s.marginMm * PdfPageFormat.mm;
+    final w = (usable - 8 * (columns - 1)) / columns;
+    final ascii = RegExp(r'^[A-Za-z0-9\-_. ]+$');
+    pw.Widget label(Product p) {
+      final code = enDigits(p.code);
+      return pw.Container(
+        width: w,
+        padding: const pw.EdgeInsets.all(6),
+        decoration: pw.BoxDecoration(border: pw.Border.all(color: _line, width: 0.5), borderRadius: pw.BorderRadius.circular(4)),
+        child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.center, children: [
+          _text(p.name, size: 9, bold: true, align: pw.TextAlign.center),
+          if (showPrice) _text('${money(p.salePrice)} $currencyLabel', size: 8),
+          pw.SizedBox(height: 3),
+          if (code.isNotEmpty && ascii.hasMatch(code))
+            pw.BarcodeWidget(barcode: pw.Barcode.code128(), data: code, width: w - 14, height: 30, drawText: true, textStyle: pw.TextStyle(fontSize: _s(7)))
+          else if (code.isNotEmpty)
+            _text(faDigits(code), size: 9),
+        ]),
+      );
+    }
+
+    doc.addPage(pw.MultiPage(
+      pageFormat: fmt,
+      margin: _margin,
+      textDirection: pw.TextDirection.rtl,
+      theme: theme,
+      footer: _footer,
+      build: (c) => [pw.Wrap(spacing: 8, runSpacing: 8, children: [for (final p in products) label(p)])],
     ));
     return doc.save();
   }

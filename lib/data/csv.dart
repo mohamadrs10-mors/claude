@@ -142,8 +142,8 @@ extension CsvRepo on Repo {
       case 'invoices':
         final ps = {for (final p in await parties()) p.id: p.name};
         return [
-          ['شماره', 'نوع', 'تاریخ', 'شخص', 'جمع اقلام', 'تخفیف', 'مالیات', 'مبلغ نهایی', 'پرداخت‌شده', 'مانده'],
-          for (final i in await invoices()) ['${i.number}', i.info.label, jalaliText(i.date), ps[i.partyId] ?? '', '${i.subtotal}', '${i.discount}', '${i.tax}', '${i.total}', '${i.paid}', '${i.remaining}'],
+          ['شماره', 'نوع', 'تاریخ', 'شخص', 'جمع اقلام', 'تخفیف', 'مالیات', 'مبلغ نهایی', 'پرداخت‌شده', 'مانده', 'سررسید'],
+          for (final i in await invoices()) ['${i.number}', i.info.label, jalaliText(i.date), ps[i.partyId] ?? '', '${i.subtotal}', '${i.discount}', '${i.tax}', '${i.total}', '${i.paid}', '${i.remaining}', i.dueDate == null ? '' : jalaliText(i.dueDate!)],
         ];
     }
     throw ArgumentError(what);

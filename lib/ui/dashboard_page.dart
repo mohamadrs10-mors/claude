@@ -53,6 +53,25 @@ class DashboardPage extends StatelessWidget {
                   ),
                   const SizedBox(height: 16),
                   Wrap(spacing: 12, runSpacing: 12, children: [
+                    if (d.overdue.isNotEmpty)
+                      SizedBox(
+                        width: box.maxWidth - 32,
+                        child: Section(
+                          title: 'فاکتورهای سررسیدگذشته (${faDigits('${d.overdue.length}')})',
+                          trailing: TextButton(onPressed: () => onNavigate('invoices'), child: const Text('فاکتورها')),
+                          child: Column(children: [
+                            for (final i in d.overdue.take(6))
+                              ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                dense: true,
+                                leading: Icon(Icons.schedule, color: red),
+                                title: Text('${i.info.label} ${faDigits('${i.number}')} • ${d.names[i.partyId] ?? ''}'),
+                                subtitle: Text('سررسید ${faDigits(jalaliText(i.dueDate!))}'),
+                                trailing: Text(moneyC(i.remaining), style: TextStyle(color: red, fontWeight: FontWeight.w700)),
+                              ),
+                          ]),
+                        ),
+                      ),
                     SizedBox(
                       width: cols == 1 ? box.maxWidth - 32 : (box.maxWidth - 44) / 2,
                       child: Section(

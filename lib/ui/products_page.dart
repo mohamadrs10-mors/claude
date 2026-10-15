@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../data/repo.dart';
 import '../util/format.dart';
+import '../print/pdf_docs.dart';
 import '../print/report_builders.dart';
 import 'auth.dart';
 import 'common.dart';
@@ -77,6 +78,18 @@ class _ProductsPageState extends State<ProductsPage> {
                     ],
                     const SizedBox(width: 8),
                     ActionChip(avatar: const Icon(Icons.folder_outlined, size: 18), label: const Text('مدیریت گروه‌ها'), onPressed: () => showGroupsDialog(c, widget.repo)),
+                    const SizedBox(width: 8),
+                    ActionChip(
+                      avatar: const Icon(Icons.qr_code_2, size: 18),
+                      label: const Text('چاپ برچسب بارکد'),
+                      onPressed: () => showPrintDialog(
+                        c,
+                        widget.repo,
+                        title: 'برچسب بارکد کالاها',
+                        filename: 'labels.pdf',
+                        build: (s, f) => PdfDocs(widget.repo, settings: s).labels([for (final p in list) p], format: f),
+                      ),
+                    ),
                     if (AccessScope.of(c).canEdit('products')) ...[
                       const SizedBox(width: 8),
                       ActionChip(avatar: const Icon(Icons.percent, size: 18), label: const Text('تغییر درصدی قیمت‌ها'), onPressed: () => showPercentDialog(c, widget.repo, shown: list)),

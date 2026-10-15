@@ -164,6 +164,38 @@ class _BackupSectionState extends State<BackupSection> {
             ),
           ]),
           gap(8),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.cloud_upload_outlined),
+            title: const Text('کپی دوم پشتیبان (مثلاً پوشهٔ Google Drive / OneDrive / Dropbox)'),
+            subtitle: Text(backups.extraDir.isEmpty ? 'تنظیم نشده؛ پشتیبان‌ها فقط روی همین دستگاه می‌ماند.' : backups.extraDir, textDirection: backups.extraDir.isEmpty ? null : TextDirection.ltr),
+            trailing: Wrap(children: [
+              TextButton(
+                onPressed: () async {
+                  try {
+                    final dir = await FilePicker.getDirectoryPath(dialogTitle: 'پوشهٔ کپی دوم پشتیبان');
+                    if (dir == null) return;
+                    await backups.setExtraDir(dir);
+                    if (mounted) setState(() {});
+                  } catch (e) {
+                    if (mounted) toast(this.context, 'انتخاب پوشه ممکن نشد: $e');
+                  }
+                },
+                child: const Text('انتخاب پوشه'),
+              ),
+              if (backups.extraDir.isNotEmpty)
+                IconButton(
+                  tooltip: 'حذف',
+                  icon: const Icon(Icons.close),
+                  onPressed: () async {
+                    await backups.setExtraDir('');
+                    if (mounted) setState(() {});
+                  },
+                ),
+            ]),
+          ),
+          if (backups.lastExtraError != null) Text('کپی دوم انجام نشد: ${backups.lastExtraError}', style: TextStyle(color: Theme.of(context).colorScheme.error, fontSize: 12)),
+          gap(8),
           OutlinedButton.icon(
             onPressed: () async {
               final messenger = ScaffoldMessenger.of(context);
@@ -536,6 +568,7 @@ class InvoiceTemplateSection extends StatelessWidget {
               ]),
               SwitchListTile(contentPadding: EdgeInsets.zero, title: const Text('چاپ لوگو'), value: on('invoice_logo'), onChanged: (v) => set('invoice_logo', v ? '1' : '0')),
               SwitchListTile(contentPadding: EdgeInsets.zero, title: const Text('ستون ردیف'), value: on('invoice_rownum'), onChanged: (v) => set('invoice_rownum', v ? '1' : '0')),
+              SwitchListTile(contentPadding: EdgeInsets.zero, title: const Text('کد QR مشخصات فاکتور (پایین فاکتور)'), value: repo.setting('invoice_qr', '0') == '1', onChanged: (v) => set('invoice_qr', v ? '1' : '0')),
               SwitchListTile(contentPadding: EdgeInsets.zero, title: const Text('محل امضای فروشنده و خریدار'), value: on('invoice_signatures'), onChanged: (v) => set('invoice_signatures', v ? '1' : '0')),
               const SizedBox(height: 6),
               OutlinedButton.icon(onPressed: () => _preview(context), icon: const Icon(Icons.visibility_outlined), label: const Text('پیش‌نمایش')),
