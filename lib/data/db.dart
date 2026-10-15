@@ -31,7 +31,7 @@ const syncTables = [
   'stock_moves',
 ];
 
-const _schemaVersion = 12;
+const _schemaVersion = 13;
 
 const _v2Tables = [
   '''CREATE TABLE products (
@@ -121,6 +121,13 @@ const _v10Tables = [
   '''CREATE TABLE users (
     id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE, full_name TEXT NOT NULL DEFAULT '', role_id TEXT NOT NULL,
     salt TEXT NOT NULL, hash TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT '')''',
+];
+
+/// Dollar prices (قیمت ارزی): a product can carry its price in dollars; the
+/// price in the current currency follows the dollar rate (setting `usd_rate`).
+const _v13Tables = [
+  'ALTER TABLE products ADD COLUMN usd_sale REAL NOT NULL DEFAULT 0',
+  'ALTER TABLE products ADD COLUMN usd_buy REAL NOT NULL DEFAULT 0',
 ];
 
 /// Warehouses (چند انبار): every invoice is for one warehouse (none = the main
@@ -239,6 +246,7 @@ final _schema = [
   ..._v10Tables,
   ..._v11Tables,
   ..._v12Tables,
+  ..._v13Tables,
   ..._v3Tables,
   ..._v5Tables,
   ..._v6Tables,
@@ -388,6 +396,11 @@ class AppDb {
           }
           if (from < 12) {
             for (final q in _v12Tables) {
+              await db.execute(q);
+            }
+          }
+          if (from < 13) {
+            for (final q in _v13Tables) {
               await db.execute(q);
             }
           }

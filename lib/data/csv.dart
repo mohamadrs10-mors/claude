@@ -83,6 +83,12 @@ const _productCols = {
   'min': ['حداقل موجودی', 'حداقل', 'min', 'min_stock'],
   'note': ['توضیحات', 'یادداشت', 'note', 'description'],
   'group': ['گروه', 'گروه کالا', 'گروه کالایی', 'group', 'category'],
+  'usd_sale': ['قیمت ارزی فروش', 'قیمت دلاری فروش', 'فروش دلار', 'usd_sale', 'sale_usd'],
+  'usd_buy': ['قیمت ارزی خرید', 'قیمت دلاری خرید', 'خرید دلار', 'usd_buy', 'buy_usd'],
+  'rate': ['نرخ دلار', 'نرخ ارز', 'قیمت دلار', 'usd_rate', 'rate', 'dollar'],
+  'pct_sale': ['درصد تغییر قیمت فروش', 'درصد تغییر فروش', 'درصد فروش', 'sale_percent', 'sale_pct'],
+  'pct_buy': ['درصد تغییر قیمت خرید', 'درصد تغییر خرید', 'درصد خرید', 'buy_percent', 'buy_pct'],
+  'pct': ['درصد تغییر قیمت', 'درصد تغییر', 'درصد افزایش', 'percent', 'pct'],
 };
 const _partyCols = {
   'name': ['نام', 'نام شخص', 'name'],
@@ -115,9 +121,9 @@ extension CsvRepo on Repo {
       case 'products':
         final groups = {for (final g in await productGroups()) g.id: g.name};
         return [
-          ['نام', 'کد', 'واحد', 'قیمت فروش', 'قیمت خرید', 'موجودی اولیه', 'موجودی فعلی', 'حداقل موجودی', 'توضیحات', 'گروه'],
+          ['نام', 'کد', 'واحد', 'قیمت فروش', 'قیمت خرید', 'موجودی اولیه', 'موجودی فعلی', 'حداقل موجودی', 'قیمت ارزی فروش', 'قیمت ارزی خرید', 'توضیحات', 'گروه'],
           for (final p in await products())
-            [p.name, p.code, p.unit, '${p.salePrice}', '${p.buyPrice}', n(p.openingStock), n(p.stock), n(p.minStock), p.note, groups[p.groupId] ?? ''],
+            [p.name, p.code, p.unit, '${p.salePrice}', '${p.buyPrice}', n(p.openingStock), n(p.stock), n(p.minStock), n(p.usdSale), n(p.usdBuy), p.note, groups[p.groupId] ?? ''],
         ];
       case 'parties':
         return [
@@ -152,6 +158,21 @@ extension CsvRepo on Repo {
     String cell(List<String> r, String k) => col.containsKey(k) && col[k]! < r.length ? r[col[k]!] : '';
     final existing = await products();
     var added = 0, updated = 0, skipped = 0;
+    // A dollar rate in the file becomes the company's rate; it is used for the
+    // dollar prices of this file and, afterwards, for every dollar-priced product.
+    var rate = usdRate;
+    var rateFromFile = false;
+    if (col.containsKey('rate')) {
+      for (final r in rows.skip(1)) {
+        final v = Csv.number(cell(r, 'rate'));
+        if (v > 0) {
+          rate = v;
+          rateFromFile = true;
+          break;
+        }
+      }
+    }
+    final touched = <String>{};
     for (final r in rows.skip(1)) {
       final name = cell(r, 'name');
       if (name.isEmpty) {
@@ -160,21 +181,47 @@ extension CsvRepo on Repo {
       }
       final code = enDigits(cell(r, 'code'));
       final match = existing.where((p) => (code.isNotEmpty && p.code == code) || (code.isEmpty && p.name == name)).firstOrNull;
-      await saveProduct(
+      var sale = col.containsKey('sale') ? Csv.number(cell(r, 'sale')).round() : (match?.salePrice ?? 0);
+      var buy = col.containsKey('buy') ? Csv.number(cell(r, 'buy')).round() : (match?.buyPrice ?? 0);
+      var usdSale = col.containsKey('usd_sale') ? Csv.number(cell(r, 'usd_sale')) : (match?.usdSale ?? 0);
+      var usdBuy = col.containsKey('usd_buy') ? Csv.number(cell(r, 'usd_buy')) : (match?.usdBuy ?? 0);
+      // A dollar price in the file decides the price in the current currency.
+      if (rate > 0) {
+        if (col.containsKey('usd_sale') && usdSale > 0) sale = Repo.fromUsd(usdSale, rate);
+        if (col.containsKey('usd_buy') && usdBuy > 0) buy = Repo.fromUsd(usdBuy, rate);
+      }
+      // Percent changes: one for both prices, or one for each.
+      final both = Csv.number(cell(r, 'pct'));
+      final pSale = col.containsKey('pct_sale') && cell(r, 'pct_sale').isNotEmpty ? Csv.number(cell(r, 'pct_sale')) : both;
+      final pBuy = col.containsKey('pct_buy') && cell(r, 'pct_buy').isNotEmpty ? Csv.number(cell(r, 'pct_buy')) : both;
+      if (pSale != 0) {
+        sale = Repo.changeByPercent(sale, pSale);
+        usdSale *= 1 + pSale / 100;
+      }
+      if (pBuy != 0) {
+        buy = Repo.changeByPercent(buy, pBuy);
+        usdBuy *= 1 + pBuy / 100;
+      }
+      final id = await saveProduct(
         id: match?.id,
         name: name,
         code: code.isEmpty ? (match?.code ?? '') : code,
         unit: cell(r, 'unit').isEmpty ? (match?.unit ?? 'عدد') : cell(r, 'unit'),
-        salePrice: col.containsKey('sale') ? Csv.number(cell(r, 'sale')).round() : (match?.salePrice ?? 0),
-        buyPrice: col.containsKey('buy') ? Csv.number(cell(r, 'buy')).round() : (match?.buyPrice ?? 0),
+        salePrice: sale,
+        buyPrice: buy,
         openingStock: col.containsKey('opening') ? Csv.number(cell(r, 'opening')) : (match?.openingStock ?? 0),
         minStock: col.containsKey('min') ? Csv.number(cell(r, 'min')) : (match?.minStock ?? 0),
         note: col.containsKey('note') ? cell(r, 'note') : (match?.note ?? ''),
         // A group column creates the groups that do not exist yet; without one, groups are left alone.
         groupId: cell(r, 'group').isEmpty ? null : await groupIdByName(cell(r, 'group')),
+        usdSale: usdSale,
+        usdBuy: usdBuy,
       );
+      touched.add(id);
       match == null ? added++ : updated++;
     }
+    // Only a rate in the file (no dollar columns): reprice the dollar products that were not in the file too.
+    if (rateFromFile) await applyUsdRate(rate);
     return ImportResult(added, updated, skipped);
   }
 

@@ -46,8 +46,14 @@ class Product {
     this.stock = 0,
     this.costPrice = 0,
     this.groupId,
+    this.usdSale = 0,
+    this.usdBuy = 0,
   });
   final String id, name, code, unit, note;
+
+  /// Price in dollars (0: not priced in dollars); the price in the current
+  /// currency then follows the dollar rate.
+  final double usdSale, usdBuy;
 
   /// The product group (گروه کالایی), if any.
   final String? groupId;
@@ -671,6 +677,8 @@ class Repo extends ChangeNotifier {
           stock: (r['stock'] as num).toDouble(),
           costPrice: r['cost_price'] as int,
           groupId: r['group_id'] as String?,
+          usdSale: (r['usd_sale'] as num).toDouble(),
+          usdBuy: (r['usd_buy'] as num).toDouble(),
         )
     ];
   }
@@ -788,7 +796,7 @@ class Repo extends ChangeNotifier {
     changed();
   }
 
-  Future<void> saveProduct({
+  Future<String> saveProduct({
     String? id,
     required String name,
     String code = '',
@@ -800,18 +808,94 @@ class Repo extends ChangeNotifier {
     String note = '',
     String? groupId,
     bool clearGroup = false,
+    double? usdSale,
+    double? usdBuy,
   }) async {
     // Callers that do not know about groups (spreadsheet import...) keep the group a product has.
     var group = groupId;
     if (group == null && !clearGroup && id != null) {
       group = (await store.db.query('products', columns: ['group_id'], where: 'id=?', whereArgs: [id])).firstOrNull?['group_id'] as String?;
     }
+    // Callers that do not know about dollar prices keep what the product has.
+    var uSale = usdSale, uBuy = usdBuy;
+    if ((uSale == null || uBuy == null) && id != null) {
+      final cur = (await store.db.query('products', columns: ['usd_sale', 'usd_buy'], where: 'id=?', whereArgs: [id])).firstOrNull;
+      uSale ??= (cur?['usd_sale'] as num?)?.toDouble();
+      uBuy ??= (cur?['usd_buy'] as num?)?.toDouble();
+    }
+    final pid = id ?? AppDb.newId();
     await store.save('products', {
-      'id': ?id,
+      'id': pid,
       'name': name, 'code': code, 'unit': unit, 'sale_price': salePrice, 'buy_price': buyPrice,
       'opening_stock': openingStock, 'min_stock': minStock, 'note': note, 'group_id': group,
+      'usd_sale': uSale ?? 0, 'usd_buy': uBuy ?? 0,
     });
     changed();
+    return pid;
+  }
+
+  // ---- price changes ------------------------------------------------------
+
+  /// Price of one dollar in the current currency (0 when not set).
+  double get usdRate => double.tryParse(enDigits(setting('usd_rate', '0')).replaceAll(',', '')) ?? 0;
+
+  /// Price in the current currency of [usd] dollars at [rate].
+  static int fromUsd(double usd, double rate) => (usd * rate).round();
+
+  /// New price after changing [price] by [percent] percent (negative: decrease),
+  /// rounded to the nearest [roundTo] (1 = whole units).
+  static int changeByPercent(int price, double percent, {int roundTo = 1}) {
+    final v = price * (1 + percent / 100);
+    final step = roundTo < 1 ? 1 : roundTo;
+    return ((v / step).round() * step).clamp(0, 1 << 52);
+  }
+
+  /// Sets the dollar rate and reprices every product that has a dollar price.
+  /// Returns how many products changed.
+  Future<int> applyUsdRate(double rate) async {
+    if (rate <= 0) throw StateError('نرخ دلار باید بیشتر از صفر باشد.');
+    var n = 0;
+    await store.db.transaction((tx) async {
+      await store.save('settings', {'id': 'usd_rate', 'value': plainNum(rate, decimals: 4)}, exec: tx);
+      for (final r in await tx.query('products', where: 'deleted=0 AND (usd_sale>0 OR usd_buy>0)')) {
+        final sale = (r['usd_sale'] as num) > 0 ? fromUsd((r['usd_sale'] as num).toDouble(), rate) : r['sale_price'] as int;
+        final buy = (r['usd_buy'] as num) > 0 ? fromUsd((r['usd_buy'] as num).toDouble(), rate) : r['buy_price'] as int;
+        if (sale == r['sale_price'] && buy == r['buy_price']) continue;
+        await store.save('products', {...r, 'sale_price': sale, 'buy_price': buy}, exec: tx);
+        n++;
+      }
+    });
+    await _loadSettings();
+    changed();
+    return n;
+  }
+
+  /// Raises or lowers prices by [percent] percent for the given products (all
+  /// when [ids] is null). Dollar prices change by the same percent so they stay
+  /// consistent with the new prices. Returns how many products changed.
+  Future<int> adjustPrices(double percent, {bool sale = true, bool buy = true, Set<String>? ids, int roundTo = 1}) async {
+    if (percent <= -100) throw StateError('درصد کاهش باید کمتر از ۱۰۰ باشد.');
+    var n = 0;
+    await store.db.transaction((tx) async {
+      for (final r in await tx.query('products', where: 'deleted=0')) {
+        if (ids != null && !ids.contains(r['id'])) continue;
+        final f = 1 + percent / 100;
+        final next = {...r};
+        if (sale) {
+          next['sale_price'] = changeByPercent(r['sale_price'] as int, percent, roundTo: roundTo);
+          next['usd_sale'] = (r['usd_sale'] as num).toDouble() * f;
+        }
+        if (buy) {
+          next['buy_price'] = changeByPercent(r['buy_price'] as int, percent, roundTo: roundTo);
+          next['usd_buy'] = (r['usd_buy'] as num).toDouble() * f;
+        }
+        if (next['sale_price'] == r['sale_price'] && next['buy_price'] == r['buy_price']) continue;
+        await store.save('products', next, exec: tx);
+        n++;
+      }
+    });
+    changed();
+    return n;
   }
 
   // ---- product groups -----------------------------------------------------

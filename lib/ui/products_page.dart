@@ -77,6 +77,12 @@ class _ProductsPageState extends State<ProductsPage> {
                     ],
                     const SizedBox(width: 8),
                     ActionChip(avatar: const Icon(Icons.folder_outlined, size: 18), label: const Text('مدیریت گروه‌ها'), onPressed: () => showGroupsDialog(c, widget.repo)),
+                    if (AccessScope.of(c).canEdit('products')) ...[
+                      const SizedBox(width: 8),
+                      ActionChip(avatar: const Icon(Icons.percent, size: 18), label: const Text('تغییر درصدی قیمت‌ها'), onPressed: () => showPercentDialog(c, widget.repo, shown: list)),
+                      const SizedBox(width: 8),
+                      ActionChip(avatar: const Icon(Icons.attach_money, size: 18), label: Text(widget.repo.usdRate == 0 ? 'نرخ دلار' : 'نرخ دلار: ${inputNum(widget.repo.usdRate)}'), onPressed: () => showRateDialog(c, widget.repo)),
+                    ],
                   ]),
                 ),
                 const SizedBox(height: 12),
@@ -158,6 +164,24 @@ Future<void> editProduct(BuildContext c, Repo repo, {Product? product, String? p
   final minStock = TextEditingController(text: p == null || p.minStock == 0 ? '' : qtyText(p.minStock));
   final note = TextEditingController(text: p?.note);
   final key = GlobalKey<FormState>();
+  // Dollar prices: the price in the current currency follows the dollar rate.
+  final usdSale = TextEditingController(text: p == null || p.usdSale == 0 ? '' : inputNum(p.usdSale));
+  final usdBuy = TextEditingController(text: p == null || p.usdBuy == 0 ? '' : inputNum(p.usdBuy));
+  final startRate = repo.usdRate;
+  final rate = TextEditingController(text: startRate == 0 ? '' : inputNum(startRate));
+  final pct = TextEditingController();
+  var pctTarget = 'both';
+  void reprice() {
+    final r = parseMoneyNum(rate.text);
+    if (r <= 0) return;
+    final us = parseMoneyNum(usdSale.text), ub = parseMoneyNum(usdBuy.text);
+    if (us > 0) sale.text = inputNum(Repo.fromUsd(us, r), decimals: 0);
+    if (ub > 0) buy.text = inputNum(Repo.fromUsd(ub, r), decimals: 0);
+  }
+
+  for (final ctl in [usdSale, usdBuy, rate]) {
+    ctl.addListener(reprice);
+  }
 
   await showDialog(
     context: c,
@@ -238,6 +262,78 @@ Future<void> editProduct(BuildContext c, Repo repo, {Product? product, String? p
                 const SizedBox(width: 12),
                 Expanded(child: AmountField(controller: buy, label: 'قیمت خرید')),
               ]),
+              gap(8),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(border: Border.all(color: Theme.of(dc).colorScheme.outlineVariant), borderRadius: BorderRadius.circular(10)),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('افزایش / کاهش درصدی قیمت', style: Theme.of(dc).textTheme.titleSmall),
+                  gap(8),
+                  Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    SizedBox(
+                      width: 110,
+                      child: TextFormField(
+                        controller: pct,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+                        textDirection: TextDirection.ltr,
+                        decoration: const InputDecoration(labelText: 'درصد', suffixText: '٪', helperText: 'منفی = کاهش'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: SegmentedButton<String>(
+                        showSelectedIcon: false,
+                        segments: const [
+                          ButtonSegment(value: 'both', label: Text('هر دو')),
+                          ButtonSegment(value: 'sale', label: Text('فروش')),
+                          ButtonSegment(value: 'buy', label: Text('خرید')),
+                        ],
+                        selected: {pctTarget},
+                        onSelectionChanged: (v) => set(() => pctTarget = v.first),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    FilledButton.tonal(
+                      onPressed: () {
+                        final v = parseQty(pct.text.replaceAll('−', '-'));
+                        if (v == 0 || v <= -100) return toast(dc, 'درصد را وارد کنید (مثلاً ۱۰ یا -۵).');
+                        final f = 1 + v / 100;
+                        if (pctTarget != 'buy') {
+                          sale.text = inputNum(Repo.changeByPercent(parseAmount(sale.text), v), decimals: 0);
+                          final u = parseMoneyNum(usdSale.text);
+                          if (u > 0) usdSale.text = inputNum(u * f);
+                        }
+                        if (pctTarget != 'sale') {
+                          buy.text = inputNum(Repo.changeByPercent(parseAmount(buy.text), v), decimals: 0);
+                          final u = parseMoneyNum(usdBuy.text);
+                          if (u > 0) usdBuy.text = inputNum(u * f);
+                        }
+                        pct.clear();
+                        set(() {});
+                      },
+                      child: const Text('اعمال'),
+                    ),
+                  ]),
+                ]),
+              ),
+              gap(8),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(border: Border.all(color: Theme.of(dc).colorScheme.outlineVariant), borderRadius: BorderRadius.circular(10)),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('قیمت ارزی (دلار)', style: Theme.of(dc).textTheme.titleSmall),
+                  const SizedBox(height: 2),
+                  Text('اگر قیمت دلاری بدهید، قیمت فروش/خرید همیشه برابر «قیمت دلاری × نرخ دلار» است و با عوض کردن نرخ همین‌جا فوراً تغییر می‌کند.', style: Theme.of(dc).textTheme.bodySmall),
+                  gap(8),
+                  Row(children: [
+                    Expanded(child: AmountField(controller: usdSale, label: 'فروش (دلار)', decimal: true, suffix: '\$')),
+                    const SizedBox(width: 12),
+                    Expanded(child: AmountField(controller: usdBuy, label: 'خرید (دلار)', decimal: true, suffix: '\$')),
+                  ]),
+                  gap(),
+                  AmountField(controller: rate, label: 'نرخ هر دلار', decimal: true, helper: 'با ذخیره، قیمت بقیهٔ کالاهای دلاری هم با این نرخ به‌روز می‌شود'),
+                ]),
+              ),
               gap(),
               Row(children: [
                 Expanded(
@@ -294,6 +390,16 @@ Future<void> editProduct(BuildContext c, Repo repo, {Product? product, String? p
         FilledButton(
           onPressed: () async {
             if (!key.currentState!.validate()) return;
+            final newRate = parseMoneyNum(rate.text);
+            final rateChanged = newRate > 0 && (newRate - startRate).abs() > 1e-9;
+            // Changing the rate here changes every dollar-priced product; ask when others are affected.
+            var applyRate = rateChanged;
+            if (rateChanged) {
+              final others = (await repo.products()).where((x) => x.id != p?.id && (x.usdSale > 0 || x.usdBuy > 0)).length;
+              if (others > 0 && dc.mounted) {
+                applyRate = await confirm(dc, 'نرخ دلار از ${inputNum(startRate)} به ${inputNum(newRate)} تغییر کرد. قیمت ${faDigits('$others')} کالای دلاری دیگر هم با نرخ تازه به‌روز شود؟ (اگر «خیر» بزنید فقط همین کالا عوض می‌شود و نرخ سراسری همان قبلی می‌ماند.)');
+              }
+            }
             await repo.saveProduct(
               id: p?.id,
               name: name.text.trim(),
@@ -306,7 +412,10 @@ Future<void> editProduct(BuildContext c, Repo repo, {Product? product, String? p
               note: note.text.trim(),
               groupId: group,
               clearGroup: group == null,
+              usdSale: parseMoneyNum(usdSale.text),
+              usdBuy: parseMoneyNum(usdBuy.text),
             );
+            if (applyRate) await repo.applyUsdRate(newRate);
             if (dc.mounted) Navigator.pop(dc);
           },
           child: const Text('ذخیره'),
@@ -381,6 +490,122 @@ Future<void> showGroupsDialog(BuildContext c, Repo repo) async {
               final n = await askGroupName(dc);
               if (n != null) await repo.saveProductGroup(name: n);
             },
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+/// Raises or lowers the prices of many products by a percent: all of them or
+/// only those on screen (the search / group filter).
+Future<void> showPercentDialog(BuildContext context, Repo repo, {required List<Product> shown}) async {
+  final pct = TextEditingController();
+  var target = 'both', scope = 'shown', round = 1;
+  String? error;
+  await showDialog<void>(
+    context: context,
+    builder: (dc) => StatefulBuilder(
+      builder: (dc, set) => AlertDialog(
+        title: const Text('تغییر درصدی قیمت‌ها'),
+        content: SizedBox(
+          width: 420,
+          child: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              TextField(
+                controller: pct,
+                autofocus: true,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+                textDirection: TextDirection.ltr,
+                decoration: const InputDecoration(labelText: 'درصد تغییر', suffixText: '٪', helperText: 'عدد مثبت = افزایش، عدد منفی = کاهش (مثلاً ۱۰ یا -۵)'),
+              ),
+              gap(),
+              const Text('کدام قیمت'),
+              const SizedBox(height: 6),
+              SegmentedButton<String>(
+                showSelectedIcon: false,
+                segments: const [ButtonSegment(value: 'both', label: Text('هر دو')), ButtonSegment(value: 'sale', label: Text('فروش')), ButtonSegment(value: 'buy', label: Text('خرید'))],
+                selected: {target},
+                onSelectionChanged: (v) => set(() => target = v.first),
+              ),
+              gap(),
+              const Text('روی کدام کالاها'),
+              const SizedBox(height: 6),
+              SegmentedButton<String>(
+                showSelectedIcon: false,
+                segments: [
+                  ButtonSegment(value: 'shown', label: Text('نمایش‌داده‌شده (${faDigits('${shown.length}')})')),
+                  const ButtonSegment(value: 'all', label: Text('همهٔ کالاها')),
+                ],
+                selected: {scope},
+                onSelectionChanged: (v) => set(() => scope = v.first),
+              ),
+              gap(),
+              DropdownButtonFormField<int>(
+                initialValue: round,
+                decoration: const InputDecoration(labelText: 'گرد کردن قیمت جدید'),
+                items: const [
+                  DropdownMenuItem(value: 1, child: Text('بدون گرد کردن')),
+                  DropdownMenuItem(value: 100, child: Text('به ۱۰۰')),
+                  DropdownMenuItem(value: 1000, child: Text('به ۱٬۰۰۰')),
+                  DropdownMenuItem(value: 10000, child: Text('به ۱۰٬۰۰۰')),
+                ],
+                onChanged: (v) => round = v ?? 1,
+              ),
+              if (error != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text(error!, style: TextStyle(color: Theme.of(dc).colorScheme.error))),
+            ]),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dc), child: const Text('انصراف')),
+          FilledButton(
+            onPressed: () async {
+              final v = parseQty(pct.text.replaceAll('−', '-'));
+              if (v == 0) return set(() => error = 'درصد را وارد کنید.');
+              try {
+                final n = await repo.adjustPrices(v, sale: target != 'buy', buy: target != 'sale', ids: scope == 'all' ? null : {for (final p in shown) p.id}, roundTo: round);
+                if (dc.mounted) Navigator.pop(dc);
+                if (context.mounted) toast(context, 'قیمت ${faDigits('$n')} کالا ${v > 0 ? 'افزایش' : 'کاهش'} یافت.');
+              } catch (e) {
+                set(() => error = e is StateError ? e.message : '$e');
+              }
+            },
+            child: const Text('اعمال'),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+/// Sets the dollar rate for the whole company; every dollar-priced product follows.
+Future<void> showRateDialog(BuildContext context, Repo repo) async {
+  final rate = TextEditingController(text: repo.usdRate == 0 ? '' : inputNum(repo.usdRate));
+  String? error;
+  await showDialog<void>(
+    context: context,
+    builder: (dc) => StatefulBuilder(
+      builder: (dc, set) => AlertDialog(
+        title: const Text('نرخ دلار'),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('قیمت کالاهایی که «قیمت ارزی (دلار)» دارند، با نرخ تازه دوباره حساب می‌شود (قیمت = دلار × نرخ).', style: Theme.of(dc).textTheme.bodySmall),
+          gap(),
+          AmountField(controller: rate, label: 'نرخ هر دلار', decimal: true),
+          if (error != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text(error!, style: TextStyle(color: Theme.of(dc).colorScheme.error))),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dc), child: const Text('انصراف')),
+          FilledButton(
+            onPressed: () async {
+              try {
+                final n = await repo.applyUsdRate(parseMoneyNum(rate.text));
+                if (dc.mounted) Navigator.pop(dc);
+                if (context.mounted) toast(context, 'نرخ دلار ثبت شد؛ قیمت ${faDigits('$n')} کالا به‌روز شد.');
+              } catch (e) {
+                set(() => error = e is StateError ? e.message : '$e');
+              }
+            },
+            child: const Text('ثبت و به‌روزرسانی قیمت‌ها'),
           ),
         ],
       ),
