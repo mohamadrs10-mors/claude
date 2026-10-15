@@ -11,8 +11,10 @@ import '../data/backup_service.dart';
 import '../data/csv.dart';
 import '../data/guard.dart';
 import '../data/repo.dart';
+import '../print/pdf_docs.dart';
 import '../util/format.dart';
 import 'common.dart';
+import 'print_dialog.dart';
 import 'recovery_dialogs.dart';
 
 /// Logo of the business, printed on invoices and reports. Stored as a synced
@@ -414,7 +416,9 @@ class PeriodLockSection extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => ListenableBuilder(listenable: repo, builder: _build);
+
+  Widget _build(BuildContext context, Widget? _) {
     final lock = repo.setting(lockSettingKey);
     final lastYearEnd = isoOf(Jalali(Jalali.now().year, 1, 1).toDateTime().subtract(const Duration(days: 1)));
     return Section(
@@ -451,4 +455,91 @@ class PeriodLockSection extends StatelessWidget {
       ]),
     );
   }
+}
+
+/// Looks of the printed invoice (قالب فاکتور): design, colour and what is shown.
+/// Synced settings, so every device prints the same invoice.
+class InvoiceTemplateSection extends StatelessWidget {
+  const InvoiceTemplateSection({super.key, required this.repo});
+  final Repo repo;
+
+  Future<void> _preview(BuildContext context) async {
+    final real = (await repo.invoices()).where((i) => i.kind != 'proforma').firstOrNull;
+    Invoice inv;
+    List<InvoiceItem> items;
+    Party? party;
+    if (real != null) {
+      inv = real;
+      items = await repo.invoiceItems(real.id);
+      party = (await repo.parties()).where((p) => p.id == real.partyId).firstOrNull;
+    } else {
+      items = [InvoiceItem('برنج ایرانی', 10, 1500000), InvoiceItem('روغن مایع', 4, 2200000), InvoiceItem('خدمات حمل', 1, 300000)];
+      inv = Invoice('sample', 1, 'sale', todayIso(), 'p', 100000, 'نمونهٔ توضیحات فاکتور', items.fold(0, (a, i) => a + i.total), 0, 9);
+      party = Party('p', 'مشتری نمونه', '09120000000', '', 0);
+    }
+    if (!context.mounted) return;
+    await showPrintDialog(
+      context,
+      repo,
+      title: 'پیش‌نمایش فاکتور',
+      filename: 'invoice-preview.pdf',
+      build: (s, f) => PdfDocs(repo, settings: s).invoice(inv, items, party, format: f),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+        listenable: repo,
+        builder: (context, _) {
+          final tpl = repo.setting('invoice_template', 'classic');
+          final accent = repo.setting('invoice_accent', 'green');
+          bool on(String k) => repo.setting(k, '1') != '0';
+          Future<void> set(String k, String v) async {
+            try {
+              await repo.setSetting(k, v);
+            } catch (e) {
+              if (context.mounted) toast(context, '$e');
+            }
+          }
+
+          return Section(
+            title: 'قالب فاکتور',
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('طرح چاپ فاکتور روی A4 و A5 (رسید رول همان قالب فشردهٔ خودش را دارد). هنگام چاپ هم می‌توانید طرح دیگری را فقط برای همان چاپ انتخاب کنید.', style: Theme.of(context).textTheme.bodySmall),
+              const SizedBox(height: 10),
+              Wrap(spacing: 8, runSpacing: 8, children: [
+                for (final (id, title) in PdfDocs.invoiceTemplates) ChoiceChip(label: Text(title), selected: tpl == id, onSelected: (_) => set('invoice_template', id)),
+              ]),
+              const SizedBox(height: 14),
+              const Text('رنگ اصلی'),
+              const SizedBox(height: 6),
+              Wrap(spacing: 10, runSpacing: 8, children: [
+                for (final (id, title, argb) in PdfDocs.accentChoices)
+                  Tooltip(
+                    message: title,
+                    child: InkWell(
+                      customBorder: const CircleBorder(),
+                      onTap: () => set('invoice_accent', id),
+                      child: Container(
+                        width: 34,
+                        height: 34,
+                        decoration: BoxDecoration(
+                          color: Color(argb),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: accent == id ? Theme.of(context).colorScheme.onSurface : Colors.transparent, width: 3),
+                        ),
+                        child: accent == id ? const Icon(Icons.check, color: Colors.white, size: 18) : null,
+                      ),
+                    ),
+                  ),
+              ]),
+              SwitchListTile(contentPadding: EdgeInsets.zero, title: const Text('چاپ لوگو'), value: on('invoice_logo'), onChanged: (v) => set('invoice_logo', v ? '1' : '0')),
+              SwitchListTile(contentPadding: EdgeInsets.zero, title: const Text('ستون ردیف'), value: on('invoice_rownum'), onChanged: (v) => set('invoice_rownum', v ? '1' : '0')),
+              SwitchListTile(contentPadding: EdgeInsets.zero, title: const Text('محل امضای فروشنده و خریدار'), value: on('invoice_signatures'), onChanged: (v) => set('invoice_signatures', v ? '1' : '0')),
+              const SizedBox(height: 6),
+              OutlinedButton.icon(onPressed: () => _preview(context), icon: const Icon(Icons.visibility_outlined), label: const Text('پیش‌نمایش')),
+            ]),
+          );
+        },
+      );
 }

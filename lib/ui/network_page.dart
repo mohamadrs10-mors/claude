@@ -43,7 +43,9 @@ class _NetworkPageState extends State<NetworkPage> {
   }
 
   Future<void> _mode(String m) async {
-    if (m == NetMode.client && !await confirm(context, 'این سیستم به یک سرور وصل می‌شود و روی اطلاعات آنجا کار می‌کند. اطلاعات فعلی همین سیستم دست‌نخورده می‌ماند و با بازگشت به حالت مستقل دوباره دیده می‌شود. ادامه بدهم؟')) return;
+    if (m == NetMode.mobile && !await confirm(context, 'این دستگاه به حالت موبایل می‌رود: یک نسخهٔ آفلاین از اطلاعات یک شرکت سرور را نگه می‌دارد و فقط فاکتور و اشخاص را ثبت می‌کند. اطلاعات فعلی همین دستگاه دست‌نخورده می‌ماند. ادامه بدهم؟')) return;
+    if (!mounted) return;
+    if (m == NetMode.client && !await confirm(context, 'این سیستم به یک سرور وصل می‌شود و اطلاعات آنجا را می‌بیند (بدون حق ثبت و ویرایش). اطلاعات فعلی همین سیستم دست‌نخورده می‌ماند و با بازگشت به حالت مستقل دوباره دیده می‌شود. ادامه بدهم؟')) return;
     await net.setMode(m);
     if (mounted) setState(() {});
   }
@@ -60,6 +62,7 @@ class _NetworkPageState extends State<NetworkPage> {
                   ButtonSegment(value: NetMode.standalone, icon: Icon(Icons.computer), label: Text('مستقل')),
                   ButtonSegment(value: NetMode.server, icon: Icon(Icons.dns_outlined), label: Text('سرور')),
                   ButtonSegment(value: NetMode.client, icon: Icon(Icons.lan_outlined), label: Text('کلاینت')),
+                  ButtonSegment(value: NetMode.mobile, icon: Icon(Icons.smartphone), label: Text('موبایل')),
                 ],
                 selected: {net.mode},
                 onSelectionChanged: (s) => _mode(s.first),
@@ -68,7 +71,8 @@ class _NetworkPageState extends State<NetworkPage> {
               Text(
                 switch (net.mode) {
                   NetMode.server => 'اطلاعات روی همین سیستم می‌ماند و سیستم‌های دیگر شبکه (کلاینت‌ها) با نام کاربری و رمز خودشان روی همین اطلاعات کار می‌کنند. این سیستم باید روشن و برنامه باز باشد.',
-                  NetMode.client => 'این سیستم اطلاعاتی نگه نمی‌دارد و روی اطلاعات سرور کار می‌کند.',
+                  NetMode.client => 'این سیستم اطلاعاتی نگه نمی‌دارد و فقط اطلاعات سرور را می‌بیند؛ ثبت و ویرایش روی سیستم سرور انجام می‌شود.',
+                  NetMode.mobile => 'یک نسخهٔ کامل از اطلاعات روی همین دستگاه می‌ماند و بدون شبکه هم کار می‌کند. فاکتورها را می‌زنید و هر وقت به سرور وصل شدید همگام می‌کنید.',
                   _ => 'هر سیستم اطلاعات خودش را دارد؛ در صورت نیاز از بخش «همگام‌سازی» دو سیستم را با هم یکی می‌کنید.',
                 },
                 style: Theme.of(context).textTheme.bodySmall,

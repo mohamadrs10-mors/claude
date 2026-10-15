@@ -218,10 +218,31 @@ const invoiceKinds = [
 InvoiceKind invoiceKind(String code) =>
     invoiceKinds.firstWhere((k) => k.code == code, orElse: () => invoiceKinds.first);
 
+/// Id of the warehouse every company has; invoices without a warehouse use it.
+const mainWarehouseId = 'wh-main';
+
+class Warehouse {
+  Warehouse(this.id, this.name, this.note);
+  final String id, name, note;
+  bool get isMain => id == mainWarehouseId;
+}
+
+/// A transfer between two warehouses, or a correction after a count.
+class StockMove {
+  StockMove(this.id, this.date, this.kind, this.productId, this.warehouseId, this.toWarehouseId, this.qty, this.note);
+  final String id, date, kind, productId, warehouseId, note;
+  final String? toWarehouseId;
+  final double qty;
+  bool get isTransfer => kind == 'transfer';
+}
+
 class Invoice {
   Invoice(this.id, this.number, this.kind, this.date, this.partyId, this.discount,
-      this.note, this.subtotal, this.paid, this.taxPercent, [this.refId, this.orderId, this.prepaid = 0]);
+      this.note, this.subtotal, this.paid, this.taxPercent, [this.refId, this.orderId, this.prepaid = 0, this.warehouseId]);
   final String id, kind, date, partyId, note;
+
+  /// The warehouse the goods come from / go to (null: the main one).
+  final String? warehouseId;
 
   /// The order (with an advance payment) this sale invoice was made for.
   final String? orderId;
@@ -631,7 +652,8 @@ class Repo extends ChangeNotifier {
       SELECT p.*, p.opening_stock + COALESCE((
         SELECT SUM(it.qty * CASE WHEN i.kind IN ('purchase','sale_return') THEN 1 ELSE -1 END)
         FROM invoice_items it JOIN invoices i ON i.id=it.invoice_id
-        WHERE it.product_id=p.id AND it.deleted=0 AND i.deleted=0 AND i.kind<>'proforma'),0) AS stock,
+        WHERE it.product_id=p.id AND it.deleted=0 AND i.deleted=0 AND i.kind<>'proforma'),0)
+        + COALESCE((SELECT SUM(m.qty) FROM stock_moves m WHERE m.product_id=p.id AND m.deleted=0 AND m.kind='adjust'),0) AS stock,
         COALESCE((SELECT c.unit_cost FROM costings c WHERE c.product_id=p.id AND c.deleted=0),0) AS cost_price
       FROM products p WHERE p.deleted=0 ORDER BY p.name''');
     return [
@@ -651,6 +673,119 @@ class Repo extends ChangeNotifier {
           groupId: r['group_id'] as String?,
         )
     ];
+  }
+
+  // ---- warehouses ---------------------------------------------------------
+
+  Future<List<Warehouse>> warehouses() async {
+    final rows = await store.db.query('warehouses', where: 'deleted=0', orderBy: "id='$mainWarehouseId' DESC, name");
+    return [for (final r in rows) Warehouse(r['id'] as String, r['name'] as String, r['note'] as String)];
+  }
+
+  Future<String> saveWarehouse({String? id, required String name, String note = ''}) async {
+    final n = name.trim();
+    if (n.isEmpty) throw StateError('نام انبار را بنویسید.');
+    final dup = await store.db.query('warehouses', where: 'deleted=0 AND name=? AND id<>?', whereArgs: [n, id ?? '']);
+    if (dup.isNotEmpty) throw StateError('انبار دیگری با این نام هست.');
+    final wid = id ?? AppDb.newId();
+    await store.save('warehouses', {'id': wid, 'name': n, 'note': note});
+    changed();
+    return wid;
+  }
+
+  /// Returns an error text, or null when the warehouse was removed.
+  Future<String?> deleteWarehouse(String id) async {
+    if (id == mainWarehouseId) return 'انبار اصلی حذف نمی‌شود.';
+    final used = await store.db.rawQuery(
+        "SELECT (SELECT COUNT(*) FROM invoices WHERE warehouse_id=? AND deleted=0) + (SELECT COUNT(*) FROM stock_moves WHERE deleted=0 AND (warehouse_id=? OR to_warehouse_id=?)) AS n",
+        [id, id, id]);
+    if ((used.first['n'] as int) > 0) return 'این انبار در فاکتور یا حرکت انبار استفاده شده و قابل حذف نیست.';
+    await store.softDelete('warehouses', id);
+    changed();
+    return null;
+  }
+
+  /// Stock of every product in every warehouse: productId -> warehouseId -> quantity.
+  /// The opening stock of a product belongs to the main warehouse; invoices
+  /// count in the warehouse they were made for (none = main), transfers move
+  /// goods and counts correct a warehouse.
+  Future<Map<String, Map<String, double>>> stockByWarehouse() async {
+    final out = <String, Map<String, double>>{};
+    void add(String product, String wh, num q) {
+      final m = out.putIfAbsent(product, () => {});
+      m[wh] = (m[wh] ?? 0) + q.toDouble();
+    }
+
+    for (final r in await store.db.rawQuery('SELECT id, opening_stock FROM products WHERE deleted=0')) {
+      add(r['id'] as String, mainWarehouseId, r['opening_stock'] as num);
+    }
+    final inv = await store.db.rawQuery("""
+      SELECT it.product_id AS p, COALESCE(i.warehouse_id,'$mainWarehouseId') AS w,
+        SUM(it.qty * CASE WHEN i.kind IN ('purchase','sale_return') THEN 1 ELSE -1 END) AS q
+      FROM invoice_items it JOIN invoices i ON i.id=it.invoice_id
+      WHERE it.product_id IS NOT NULL AND it.deleted=0 AND i.deleted=0 AND i.kind<>'proforma'
+      GROUP BY it.product_id, COALESCE(i.warehouse_id,'$mainWarehouseId')""");
+    for (final r in inv) {
+      add(r['p'] as String, r['w'] as String, r['q'] as num);
+    }
+    for (final m in await store.db.query('stock_moves', where: 'deleted=0')) {
+      final q = (m['qty'] as num).toDouble();
+      if (m['kind'] == 'transfer') {
+        add(m['product_id'] as String, m['warehouse_id'] as String, -q);
+        add(m['product_id'] as String, (m['to_warehouse_id'] ?? mainWarehouseId) as String, q);
+      } else {
+        add(m['product_id'] as String, m['warehouse_id'] as String, q);
+      }
+    }
+    return out;
+  }
+
+  /// Stock of each product in one warehouse.
+  Future<Map<String, double>> stockIn(String warehouseId) async {
+    final all = await stockByWarehouse();
+    return {for (final e in all.entries) e.key: e.value[warehouseId] ?? 0};
+  }
+
+  Future<List<StockMove>> stockMoves({String? productId}) async {
+    final rows = await store.db.query('stock_moves',
+        where: 'deleted=0${productId == null ? '' : ' AND product_id=?'}', whereArgs: productId == null ? null : [productId], orderBy: 'date DESC, updated_at DESC');
+    return [
+      for (final r in rows)
+        StockMove(r['id'] as String, r['date'] as String, r['kind'] as String, r['product_id'] as String, r['warehouse_id'] as String,
+            r['to_warehouse_id'] as String?, (r['qty'] as num).toDouble(), r['note'] as String)
+    ];
+  }
+
+  /// Moves goods from [warehouseId] to [toWarehouseId] ([kind] 'transfer', [qty] > 0)
+  /// or corrects a warehouse after a count ([kind] 'adjust', [qty] is the
+  /// signed difference to add).
+  Future<String> saveStockMove({
+    String? id,
+    required String kind,
+    required String date,
+    required String productId,
+    required String warehouseId,
+    String? toWarehouseId,
+    required double qty,
+    String note = '',
+  }) async {
+    if (qty == 0) throw StateError('مقدار را وارد کنید.');
+    if (kind == 'transfer') {
+      if (qty < 0) throw StateError('مقدار انتقال باید مثبت باشد.');
+      if (toWarehouseId == null || toWarehouseId == warehouseId) throw StateError('انبار مقصد باید با انبار مبدأ فرق داشته باشد.');
+    }
+    final mid = id ?? AppDb.newId();
+    await store.save('stock_moves', {
+      'id': mid, 'date': date, 'kind': kind, 'product_id': productId, 'warehouse_id': warehouseId,
+      'to_warehouse_id': kind == 'transfer' ? toWarehouseId : null, 'qty': qty, 'note': note,
+    });
+    changed();
+    return mid;
+  }
+
+  Future<void> deleteStockMove(String id) async {
+    await store.softDelete('stock_moves', id);
+    changed();
   }
 
   Future<void> saveProduct({
@@ -781,7 +916,7 @@ class Repo extends ChangeNotifier {
         Invoice(r['id'] as String, r['number'] as int, r['kind'] as String, r['date'] as String,
             r['party_id'] as String, r['discount'] as int, r['note'] as String,
             (r['subtotal'] as num).round(), (r['paid'] as num).round(), r['tax_percent'] as int, r['ref_id'] as String?,
-            r['order_id'] as String?, r['prepaid'] as int)
+            r['order_id'] as String?, r['prepaid'] as int, r['warehouse_id'] as String?)
     ];
   }
 
@@ -829,6 +964,7 @@ class Repo extends ChangeNotifier {
       taxPercent: pro.taxPercent,
       note: pro.note,
       items: items,
+      warehouseId: pro.warehouseId,
     );
     await store.save('invoices', {
       ...(await store.db.query('invoices', where: 'id=?', whereArgs: [proformaId])).first,
@@ -850,6 +986,7 @@ class Repo extends ChangeNotifier {
     required String note,
     required List<InvoiceItem> items,
     String? orderId,
+    String? warehouseId,
   }) async {
     final invId = id ?? AppDb.newId();
     await store.db.transaction((tx) async {
@@ -882,6 +1019,7 @@ class Repo extends ChangeNotifier {
         'id': invId, 'number': no, 'kind': kind, 'date': date,
         'party_id': partyId, 'discount': discount, 'tax_percent': taxPercent, 'note': note, 'ref_id': keepRef,
         'order_id': linked, 'prepaid': prepaid,
+        'warehouse_id': warehouseId == mainWarehouseId ? null : warehouseId,
       }, exec: tx);
       final old = await tx.query('invoice_items',
           columns: ['id'], where: 'invoice_id=? AND deleted=0', whereArgs: [invId]);
@@ -1722,25 +1860,33 @@ class Repo extends ChangeNotifier {
     final prod = (await products()).firstWhere((p) => p.id == productId);
     final names = {for (final p in await parties()) p.id: p.name};
     final rows = await store.db.rawQuery('''
-      SELECT i.date AS date, i.number AS number, i.kind AS kind, i.party_id AS party, it.qty AS qty
+      SELECT i.date AS date, i.number AS number, i.kind AS kind, i.party_id AS party, it.qty AS qty, '' AS note
       FROM invoice_items it JOIN invoices i ON i.id=it.invoice_id
       WHERE it.deleted=0 AND i.deleted=0 AND i.kind<>'proforma' AND it.product_id=?
-      ORDER BY i.date, i.number''', [productId]);
+      UNION ALL
+      SELECT m.date, 0, 'adjust', '', m.qty, m.note FROM stock_moves m
+      WHERE m.deleted=0 AND m.kind='adjust' AND m.product_id=?
+      ORDER BY 1, 2''', [productId, productId]);
     num running = prod.openingStock;
     num opening = running;
     final lines = <LedgerLine>[];
     for (final r in rows) {
       final kind = r['kind'] as String;
       final qty = (r['qty'] as num).toDouble();
-      final stockIn = invoiceKind(kind).stockIn;
-      running += stockIn ? qty : -qty;
+      final adjust = kind == 'adjust';
+      final stockIn = adjust ? qty >= 0 : invoiceKind(kind).stockIn;
+      final amount = adjust ? qty.abs() : qty;
+      running += stockIn ? amount : -amount;
       final date = r['date'] as String;
       if (from != null && date.compareTo(from) < 0) {
         opening = running;
         continue;
       }
       if (toExclusive != null && date.compareTo(toExclusive) >= 0) continue;
-      lines.add(LedgerLine(date, '${invoiceKind(kind).label} ${faDigits('${r['number']}')} • ${names[r['party']] ?? ''}', stockIn ? qty : 0, stockIn ? 0 : qty, running));
+      final text = adjust
+          ? 'تعدیل موجودی (شمارش)${(r['note'] as String).isEmpty ? '' : ' • ${r['note']}'}'
+          : '${invoiceKind(kind).label} ${faDigits('${r['number']}')} • ${names[r['party']] ?? ''}';
+      lines.add(LedgerLine(date, text, stockIn ? amount : 0, stockIn ? 0 : amount, running));
     }
     return Ledger(opening, lines, lines.isEmpty ? opening : lines.last.balance);
   }

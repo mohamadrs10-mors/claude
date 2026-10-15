@@ -57,6 +57,9 @@ class MobileController extends ChangeNotifier {
   int get port => int.tryParse(prefs.get('mobile_port') ?? '') ?? 8765;
   String get code => prefs.get('mobile_code') ?? '';
   String get companyId => prefs.get('mobile_company') ?? '';
+
+  /// The id of the local copy on this device.
+  String get localId => prefs.get('mobile_local') ?? '';
   String get username => prefs.get('mobile_user') ?? '';
   DateTime? get lastSync => DateTime.tryParse(prefs.get('mobile_last_sync') ?? '');
   bool get hasPassword => _password.isNotEmpty;
@@ -72,7 +75,8 @@ class MobileController extends ChangeNotifier {
 
   void setPassword(String p) => _password = p;
 
-  Future<void> save({required String host, required int port, required String code, required String companyId, required String username}) async {
+  Future<void> save({required String host, required int port, required String code, required String companyId, required String username, String? localId}) async {
+    if (localId != null) await prefs.set('mobile_local', localId);
     await prefs.set('mobile_host', host);
     await prefs.set('mobile_port', '$port');
     await prefs.set('mobile_code', code);
@@ -83,7 +87,7 @@ class MobileController extends ChangeNotifier {
 
   /// Forgets the server (the local copy of the data stays).
   Future<void> disconnect() async {
-    for (final k in ['mobile_host', 'mobile_port', 'mobile_code', 'mobile_company', 'mobile_user', 'mobile_profile', 'mobile_last_sync']) {
+    for (final k in ['mobile_local', 'mobile_host', 'mobile_port', 'mobile_code', 'mobile_company', 'mobile_user', 'mobile_profile', 'mobile_last_sync']) {
       await prefs.set(k, '');
     }
     _password = '';

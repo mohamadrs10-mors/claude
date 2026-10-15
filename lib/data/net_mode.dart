@@ -9,11 +9,12 @@ class NetMode extends ChangeNotifier {
   NetMode(this.prefs);
   final DevicePrefs prefs;
 
-  static const standalone = 'standalone', server = 'server', client = 'client';
+  static const standalone = 'standalone', server = 'server', client = 'client', mobile = 'mobile';
 
   String get mode => prefs.get('net_mode') ?? standalone;
   bool get isClient => mode == client;
   bool get isServer => mode == server;
+  bool get isMobile => mode == mobile;
 
   Future<void> setMode(String m) async {
     await prefs.set('net_mode', m);

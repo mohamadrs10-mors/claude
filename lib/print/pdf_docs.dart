@@ -63,6 +63,26 @@ class PdfDocs {
   static String _qty(double q) => faDigits(q == q.roundToDouble() ? '${q.round()}' : q.toString());
 
   static final _accent = PdfColor.fromInt(0xFF0F5F58);
+
+  /// Invoice designs for the A4/A5 print: id and title.
+  static const invoiceTemplates = <(String, String)>[
+    ('classic', 'کلاسیک (سربرگ رنگی)'),
+    ('simple', 'ساده و رسمی'),
+    ('modern', 'مدرن (ردیف‌های راه‌راه)'),
+    ('compact', 'فشرده (برای فاکتورهای بلند)'),
+  ];
+
+  /// Accent colours to choose from: id, title and ARGB value.
+  static const accentChoices = <(String, String, int)>[
+    ('green', 'سبز', 0xFF0F5F58),
+    ('blue', 'آبی', 0xFF1D4ED8),
+    ('burgundy', 'عنابی', 0xFF9F1239),
+    ('purple', 'بنفش', 0xFF6D28D9),
+    ('orange', 'نارنجی', 0xFFC2410C),
+    ('black', 'مشکی', 0xFF111827),
+  ];
+
+  static PdfColor _accentOf(String id) => PdfColor.fromInt(accentChoices.firstWhere((a) => a.$1 == id, orElse: () => accentChoices.first).$3);
   static final _line = PdfColor.fromInt(0xFFD0D7DE);
   static final _soft = PdfColor.fromInt(0xFFF1F5F4);
 
@@ -209,7 +229,7 @@ class PdfDocs {
   // ---- invoice ------------------------------------------------------------
 
   /// An invoice on the configured paper, or a thermal roll when [roll] is true.
-  Future<Uint8List> invoice(Invoice inv, List<InvoiceItem> items, Party? party, {bool roll = false, PdfPageFormat? format}) async {
+  Future<Uint8List> invoice(Invoice inv, List<InvoiceItem> items, Party? party, {bool roll = false, PdfPageFormat? format, String? template}) async {
     final doc = pw.Document(title: '${inv.info.label} ${inv.number}', author: _business);
     final theme = await _theme();
     final info = inv.info;
@@ -273,17 +293,29 @@ class PdfDocs {
     final fmt = format ?? s.format;
     final usable = fmt.width - 2 * s.marginMm * PdfPageFormat.mm;
     final narrow = usable < 400; // A5 portrait: stack the note above the totals
+    final tpl = template ?? repo.setting('invoice_template', 'classic');
+    final compact = tpl == 'compact';
+    final accent = _accentOf(repo.setting('invoice_accent', 'green'));
+    final showLogo = repo.setting('invoice_logo', '1') != '0';
+    final rowNo = repo.setting('invoice_rownum', '1') != '0';
+    final sign = repo.setting('invoice_signatures', '1') != '0';
+    final whs = await repo.warehouses();
+    final wh = whs.length > 1 ? whs.where((w) => w.id == (inv.warehouseId ?? mainWarehouseId)).firstOrNull?.name : null;
+    final logo = showLogo ? _logo : null;
+    final fs = compact ? 0.88 : 1.0; // text scale of the table
+    final pad = compact ? 2.0 : 4.0;
+
     final totalsBox = pw.Container(
       width: narrow ? double.infinity : (usable * 0.42).clamp(190, 240).toDouble(),
       decoration: pw.BoxDecoration(border: pw.Border.all(color: _line), borderRadius: pw.BorderRadius.circular(6)),
       child: pw.Column(children: [
         for (final t in totals)
           pw.Container(
-            color: t.$3 ? _soft : null,
-            padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            color: t.$3 ? (tpl == 'modern' ? accent : _soft) : null,
+            padding: pw.EdgeInsets.symmetric(horizontal: 8, vertical: pad),
             child: pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [
-              _text(t.$1, bold: t.$3),
-              _text('${t.$2} $cur', bold: t.$3),
+              _text(t.$1, bold: t.$3, color: t.$3 && tpl == 'modern' ? PdfColors.white : null, size: 10 * fs),
+              _text('${t.$2} $cur', bold: t.$3, color: t.$3 && tpl == 'modern' ? PdfColors.white : null, size: 10 * fs),
             ]),
           ),
       ]),
@@ -296,72 +328,105 @@ class PdfDocs {
             child: _text('توضیحات: ${inv.note}', size: 9),
           );
 
+    final meta = [
+      _text(info.label, size: compact ? 13 : 17, bold: true, color: tpl == 'classic' ? PdfColors.white : (tpl == 'modern' ? accent : null)),
+      _text('شماره: ${faDigits('${inv.number}')}', color: tpl == 'classic' ? PdfColors.white : null),
+      _text('تاریخ: ${jalaliText(inv.date)}', color: tpl == 'classic' ? PdfColors.white : null),
+      if (wh != null) _text('انبار: $wh', size: 9, color: tpl == 'classic' ? PdfColors.white : null),
+    ];
+    final onHead = tpl == 'classic' ? PdfColors.white : null;
+    final business = pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+      _text(_business, size: compact ? 13 : 17, bold: true, color: onHead ?? (tpl == 'modern' ? accent : null)),
+      if (address.isNotEmpty && !compact) _text(address, size: 9, color: onHead),
+      if (phone.isNotEmpty) _text('تلفن: ${faDigits(phone)}', size: 9, color: onHead),
+      if (taxId.isNotEmpty && !compact) _text('شناسه اقتصادی: ${faDigits(taxId)}', size: 9, color: onHead),
+    ]);
+    final head = pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+      if (logo != null) ...[tpl == 'classic' ? _logoBox(logo, 54) : pw.SizedBox(width: compact ? 40 : 54, height: compact ? 40 : 54, child: pw.Image(logo, fit: pw.BoxFit.contain)), pw.SizedBox(width: 10)],
+      pw.Expanded(child: business),
+      pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.end, children: meta),
+    ]);
+    final header = switch (tpl) {
+      'classic' => pw.Container(padding: const pw.EdgeInsets.all(12), decoration: pw.BoxDecoration(color: accent, borderRadius: pw.BorderRadius.circular(8)), child: head),
+      'modern' => pw.Container(
+          padding: const pw.EdgeInsets.only(bottom: 10),
+          decoration: pw.BoxDecoration(border: pw.Border(bottom: pw.BorderSide(color: accent, width: 3))),
+          child: head),
+      'compact' => pw.Container(padding: const pw.EdgeInsets.only(bottom: 6), decoration: pw.BoxDecoration(border: pw.Border(bottom: pw.BorderSide(color: accent, width: 1))), child: head),
+      _ => pw.Container(
+          padding: const pw.EdgeInsets.all(10),
+          decoration: pw.BoxDecoration(border: pw.Border.all(color: PdfColors.grey800, width: 1.2), borderRadius: pw.BorderRadius.circular(4)),
+          child: head),
+    };
+
+    // The table: grid (classic, simple, compact) or horizontal rules with
+    // alternating rows (modern).
+    final modern = tpl == 'modern';
+    final headBg = modern ? accent : _soft;
+    final headFg = modern ? PdfColors.white : null;
+    pw.Widget c(String t, {bool bold = false, Col col = Col.text, PdfColor? color}) => pw.Padding(
+          padding: pw.EdgeInsets.symmetric(horizontal: 6, vertical: pad),
+          child: _text(t,
+              bold: bold,
+              color: color,
+              size: 10 * fs,
+              align: switch (col) {
+                Col.text => pw.TextAlign.right,
+                Col.number => pw.TextAlign.left,
+                Col.center => pw.TextAlign.center,
+              }),
+        );
+    final table = pw.Table(
+      border: modern
+          ? pw.TableBorder(horizontalInside: pw.BorderSide(color: _line, width: 0.5), bottom: pw.BorderSide(color: accent, width: 1))
+          : pw.TableBorder.all(color: tpl == 'simple' ? PdfColors.grey700 : _line, width: 0.6),
+      columnWidths: _widths([
+        if (rowNo) const pw.FixedColumnWidth(36),
+        const pw.FlexColumnWidth(4),
+        const pw.FixedColumnWidth(52),
+        const pw.FlexColumnWidth(1.6),
+        const pw.FlexColumnWidth(1.8),
+      ]),
+      children: [
+        _row([
+          if (rowNo) c('ردیف', bold: true, col: Col.center, color: headFg),
+          c('شرح کالا / خدمات', bold: true, color: headFg),
+          c('تعداد', bold: true, col: Col.center, color: headFg),
+          c('قیمت واحد', bold: true, col: Col.number, color: headFg),
+          c('مبلغ', bold: true, col: Col.number, color: headFg),
+        ], background: headBg, repeat: true),
+        for (var i = 0; i < items.length; i++)
+          _row([
+            if (rowNo) c(faDigits('${i + 1}'), col: Col.center),
+            c(items[i].title),
+            c(_qty(items[i].qty), col: Col.center),
+            c(money(items[i].unitPrice), col: Col.number),
+            c(money(items[i].total), col: Col.number),
+          ], background: modern && i.isOdd ? _soft : null),
+      ],
+    );
+
     doc.addPage(pw.MultiPage(
       pageFormat: fmt,
       margin: _margin,
       textDirection: pw.TextDirection.rtl,
       theme: theme,
       footer: _footer,
-      build: (c) => [
-        pw.Container(
-          padding: const pw.EdgeInsets.all(12),
-          decoration: pw.BoxDecoration(color: _accent, borderRadius: pw.BorderRadius.circular(8)),
-          child: pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-            if (_logo != null) ...[_logoBox(_logo!, 54), pw.SizedBox(width: 10)],
-            pw.Expanded(
-              child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-                _text(_business, size: 17, bold: true, color: PdfColors.white),
-                if (address.isNotEmpty) _text(address, size: 9, color: PdfColors.white),
-                if (phone.isNotEmpty) _text('تلفن: ${faDigits(phone)}', size: 9, color: PdfColors.white),
-                if (taxId.isNotEmpty) _text('شناسه اقتصادی: ${faDigits(taxId)}', size: 9, color: PdfColors.white),
-              ]),
-            ),
-            pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.end, children: [
-              _text(info.label, size: 17, bold: true, color: PdfColors.white),
-              _text('شماره: ${faDigits('${inv.number}')}', color: PdfColors.white),
-              _text('تاریخ: ${jalaliText(inv.date)}', color: PdfColors.white),
-            ]),
-          ]),
-        ),
-        pw.SizedBox(height: 10),
+      build: (ctx) => [
+        header,
+        pw.SizedBox(height: compact ? 6 : 10),
         pw.Container(
           width: double.infinity,
-          padding: const pw.EdgeInsets.all(8),
+          padding: pw.EdgeInsets.all(compact ? 5 : 8),
           decoration: pw.BoxDecoration(border: pw.Border.all(color: _line), borderRadius: pw.BorderRadius.circular(6)),
           child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-            _text('${info.partyLabel}: ${party?.name ?? '—'}', size: 11, bold: true),
+            _text('${info.partyLabel}: ${party?.name ?? '—'}', size: compact ? 10 : 11, bold: true),
             if ((party?.phone ?? '').isNotEmpty) _text('تلفن: ${faDigits(party!.phone)}', size: 9),
           ]),
         ),
-        pw.SizedBox(height: 10),
-        pw.Table(
-          border: pw.TableBorder.all(color: _line, width: 0.6),
-          columnWidths: _widths(const [
-            pw.FixedColumnWidth(36),
-            pw.FlexColumnWidth(4),
-            pw.FixedColumnWidth(52),
-            pw.FlexColumnWidth(1.6),
-            pw.FlexColumnWidth(1.8),
-          ]),
-          children: [
-            _row([
-              _cell('ردیف', bold: true, col: Col.center),
-              _cell('شرح کالا / خدمات', bold: true),
-              _cell('تعداد', bold: true, col: Col.center),
-              _cell('قیمت واحد', bold: true, col: Col.number),
-              _cell('مبلغ', bold: true, col: Col.number),
-            ], background: _soft, repeat: true),
-            for (var i = 0; i < items.length; i++)
-              _row([
-                _cell(faDigits('${i + 1}'), col: Col.center),
-                _cell(items[i].title),
-                _cell(_qty(items[i].qty), col: Col.center),
-                _cell(money(items[i].unitPrice), col: Col.number),
-                _cell(money(items[i].total), col: Col.number),
-              ]),
-          ],
-        ),
-        pw.SizedBox(height: 10),
+        pw.SizedBox(height: compact ? 6 : 10),
+        table,
+        pw.SizedBox(height: compact ? 6 : 10),
         if (narrow) ...[
           if (noteBox != null) ...[noteBox, pw.SizedBox(height: 8)],
           totalsBox,
@@ -371,13 +436,15 @@ class PdfDocs {
             pw.SizedBox(width: 14),
             totalsBox,
           ]),
-        pw.SizedBox(height: 30),
-        pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceAround, children: [
-          _text(inv.kind.startsWith('sale') || inv.kind == 'proforma' ? 'امضای فروشنده' : 'امضای خریدار'),
-          _text(inv.kind.startsWith('sale') || inv.kind == 'proforma' ? 'امضای خریدار' : 'امضای فروشنده'),
-        ]),
+        if (sign) ...[
+          pw.SizedBox(height: compact ? 16 : 30),
+          pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceAround, children: [
+            _text(inv.kind.startsWith('sale') || inv.kind == 'proforma' ? 'امضای فروشنده' : 'امضای خریدار'),
+            _text(inv.kind.startsWith('sale') || inv.kind == 'proforma' ? 'امضای خریدار' : 'امضای فروشنده'),
+          ]),
+        ],
         if (footer.isNotEmpty) ...[
-          pw.SizedBox(height: 18),
+          pw.SizedBox(height: compact ? 8 : 18),
           pw.Center(child: _text(footer, size: 9, color: PdfColors.grey700)),
         ],
       ],

@@ -14,11 +14,13 @@ import 'data/remote_db.dart';
 import 'data/remote_session.dart';
 import 'data/repo.dart';
 import 'data/users.dart';
+import 'sync/mobile_sync.dart';
 import 'sync/sync_service.dart';
 import 'ui/accounts_page.dart';
 import 'ui/app_theme.dart';
 import 'ui/auth.dart';
 import 'ui/client_root.dart';
+import 'ui/mobile_root.dart';
 import 'ui/network_page.dart';
 import 'ui/users_page.dart';
 import 'ui/cheques_page.dart';
@@ -35,6 +37,7 @@ import 'ui/reports_page.dart';
 import 'ui/settings_page.dart';
 import 'ui/sync_page.dart';
 import 'ui/transactions_page.dart';
+import 'ui/warehouses_page.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -53,6 +56,7 @@ Future<void> main() async {
   final backups = BackupService(companies);
   final net = NetMode(companies.prefs);
   final auth = LocalAuth(companies, sync);
+  final mobile = MobileController(companies.prefs);
   FlutterError.onError = (d) {
     if (!_report(d.exception)) FlutterError.presentError(d);
   };
@@ -60,7 +64,7 @@ Future<void> main() async {
   // Daily automatic backups: once shortly after start, then every few hours.
   Timer(const Duration(seconds: 8), backups.runIfDue);
   Timer.periodic(const Duration(hours: 3), (_) => backups.runIfDue());
-  runApp(AccountingApp(companies: companies, sync: sync, theme: theme, lock: lock, backups: backups, net: net, auth: auth));
+  runApp(AccountingApp(companies: companies, sync: sync, theme: theme, lock: lock, backups: backups, net: net, auth: auth, mobile: mobile));
 }
 
 final rootMessengerKey = GlobalKey<ScaffoldMessengerState>();
@@ -82,9 +86,10 @@ bool _report(Object e) {
 }
 
 class AccountingApp extends StatelessWidget {
-  const AccountingApp({super.key, required this.companies, required this.sync, required this.theme, required this.lock, required this.backups, required this.net, required this.auth});
+  const AccountingApp({super.key, required this.companies, required this.sync, required this.theme, required this.lock, required this.backups, required this.net, required this.auth, required this.mobile});
   final NetMode net;
   final LocalAuth auth;
+  final MobileController mobile;
   final AppLock lock;
   final BackupService backups;
   final CompanyManager companies;
@@ -113,7 +118,24 @@ class AccountingApp extends StatelessWidget {
             child: child!,
           ),
           // A new key per company rebuilds every screen with that company's data.
-          home: net.isClient
+          home: net.isMobile
+              ? MobileRoot(
+                  mobile: mobile,
+                  companies: companies,
+                  net: net,
+                  homeBuilder: (context, repo, identity) => HomePage(
+                    key: ValueKey('mobile${repo.companyId}'),
+                    repo: repo,
+                    companies: companies,
+                    sync: sync,
+                    theme: theme,
+                    lock: lock,
+                    backups: backups,
+                    net: net,
+                    mobile: mobile,
+                  ),
+                )
+              : net.isClient
               ? ClientRoot(
                   net: net,
                   prefs: companies.prefs,
@@ -190,11 +212,13 @@ const _dests = [
   _Dest('orders', 'سفارش و پیش‌دریافت', Icons.assignment_outlined, Icons.assignment),
   _Dest('deliveries', 'رسید تحویل', Icons.local_shipping_outlined, Icons.local_shipping),
   _Dest('products', 'کالاها و انبار', Icons.inventory_2_outlined, Icons.inventory_2),
+  _Dest('warehouses', 'انبارها', Icons.warehouse_outlined, Icons.warehouse),
   _Dest('pricing', 'قیمت‌گذاری', Icons.calculate_outlined, Icons.calculate),
   _Dest('parties', 'اشخاص', Icons.people_outline, Icons.people),
   _Dest('cheques', 'چک‌ها', Icons.payments_outlined, Icons.payments),
   _Dest('accounts', 'حساب‌ها', Icons.account_balance_wallet_outlined, Icons.account_balance_wallet),
   _Dest('reports', 'گزارش‌ها', Icons.bar_chart_outlined, Icons.bar_chart),
+  _Dest('mobilesync', 'همگام‌سازی با سرور', Icons.cloud_sync_outlined, Icons.cloud_sync),
   _Dest('sync', 'همگام‌سازی', Icons.sync, Icons.sync),
   _Dest('companies', 'شرکت‌ها', Icons.business_outlined, Icons.business),
   _Dest('network', 'شبکه و سرور', Icons.lan_outlined, Icons.lan),
@@ -207,6 +231,8 @@ const _dests = [
 List<_Dest> _visibleDests(Identity who) => [
       for (final d in _dests)
         if (switch (d.id) {
+          'warehouses' => who.canView('products'),
+          'mobilesync' => who.mobile,
           'sync' || 'companies' || 'network' => !who.client && who.can(permSettings),
           'users' => who.can(permUsers),
           'settings' => true,
@@ -216,9 +242,12 @@ List<_Dest> _visibleDests(Identity who) => [
     ];
 
 class HomePage extends StatefulWidget {
-  const HomePage({super.key, required this.repo, required this.companies, required this.sync, required this.theme, required this.lock, required this.backups, required this.net, this.auth, this.session});
+  const HomePage({super.key, required this.repo, required this.companies, required this.sync, required this.theme, required this.lock, required this.backups, required this.net, this.auth, this.session, this.mobile});
   final NetMode net;
   final LocalAuth? auth;
+
+  /// Set in mobile mode.
+  final MobileController? mobile;
 
   /// Set on a network client.
   final RemoteSession? session;
@@ -250,11 +279,13 @@ class _HomePageState extends State<HomePage> {
         'orders' => OrdersPage(repo: widget.repo),
         'deliveries' => DeliveriesPage(repo: widget.repo),
         'products' => ProductsPage(repo: widget.repo),
+        'warehouses' => WarehousesPage(repo: widget.repo),
         'pricing' => CostingPage(repo: widget.repo, embedded: true),
         'parties' => PartiesPage(repo: widget.repo),
         'cheques' => ChequesPage(repo: widget.repo),
         'accounts' => AccountsPage(repo: widget.repo),
         'reports' => ReportsPage(repo: widget.repo),
+        'mobilesync' => MobileSyncPage(repo: widget.repo, mobile: widget.mobile!, net: widget.net),
         'sync' => SyncPage(repo: widget.repo, sync: widget.sync, companies: widget.companies),
         'companies' => CompaniesPage(companies: widget.companies, onOpenSync: () => setState(() => page = 'sync')),
         'network' => NetworkPage(net: widget.net, sync: widget.sync, companies: widget.companies, auth: widget.auth!),
@@ -333,7 +364,7 @@ class _HomePageState extends State<HomePage> {
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Text(widget.companies.activeInfo.name,
                         maxLines: 1, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
-                    Text(who.client ? 'متصل به سرور' : (widget.companies.companies.length > 1 ? 'تغییر شرکت' : 'حسابداری'), style: Theme.of(context).textTheme.bodySmall),
+                    Text(who.mobile ? 'حالت موبایل (آفلاین)' : who.client ? 'متصل به سرور' : (widget.companies.companies.length > 1 ? 'تغییر شرکت' : 'حسابداری'), style: Theme.of(context).textTheme.bodySmall),
                   ]),
                 ),
                 if (!who.client) const Icon(Icons.unfold_more, size: 20),

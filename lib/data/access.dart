@@ -138,6 +138,8 @@ const _tableWriters = <String, List<String>>{
   'parties': ['parties.edit'],
   'products': ['products.edit', permSettings],
   'product_groups': ['products.edit', permSettings],
+  'warehouses': ['products.edit', permSettings],
+  'stock_moves': ['products.edit'],
   'costings': ['pricing.edit', 'products.edit'],
   'formulas': ['pricing.edit'],
   'cheques': ['cheques.edit', 'orders.edit'],

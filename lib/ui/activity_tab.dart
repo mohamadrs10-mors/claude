@@ -30,7 +30,11 @@ class _ActivityTabState extends State<ActivityTab> {
 
   Future<List<AuditEntry>> _load() => widget.admin.audit(userId: userId, action: action, table: table, from: from, to: to, text: text.text, limit: 500);
 
-  void _reload() => setState(() => future = _load());
+  void _reload() {
+    setState(() {
+      future = _load();
+    });
+  }
 
   @override
   void dispose() {

@@ -27,9 +27,11 @@ const syncTables = [
   'orders',
   'order_items',
   'product_groups',
+  'warehouses',
+  'stock_moves',
 ];
 
-const _schemaVersion = 11;
+const _schemaVersion = 12;
 
 const _v2Tables = [
   '''CREATE TABLE products (
@@ -119,6 +121,25 @@ const _v10Tables = [
   '''CREATE TABLE users (
     id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE, full_name TEXT NOT NULL DEFAULT '', role_id TEXT NOT NULL,
     salt TEXT NOT NULL, hash TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT '')''',
+];
+
+/// Warehouses (چند انبار): every invoice is for one warehouse (none = the main
+/// one), and goods move between warehouses or are corrected by a count.
+const _v12Tables = [
+  '''CREATE TABLE warehouses (
+    id TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
+    device_id TEXT NOT NULL, seq INTEGER NOT NULL, name TEXT NOT NULL, note TEXT NOT NULL DEFAULT '')''',
+  '''CREATE TABLE stock_moves (
+    id TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
+    device_id TEXT NOT NULL, seq INTEGER NOT NULL,
+    date TEXT NOT NULL, kind TEXT NOT NULL, product_id TEXT NOT NULL, warehouse_id TEXT NOT NULL,
+    to_warehouse_id TEXT, qty REAL NOT NULL, note TEXT NOT NULL DEFAULT '')''',
+  'CREATE INDEX idx_stock_moves_product ON stock_moves(product_id)',
+  'CREATE INDEX idx_warehouses_seq ON warehouses(seq)',
+  'CREATE INDEX idx_stock_moves_seq ON stock_moves(seq)',
+  'ALTER TABLE invoices ADD COLUMN warehouse_id TEXT',
+  // The main warehouse exists on every device with the same id.
+  "INSERT INTO warehouses (id, updated_at, deleted, device_id, seq, name) VALUES ('wh-main', 1, 0, 'init', 0, 'انبار اصلی')",
 ];
 
 /// Who did what (گزارش فعالیت کاربران). Local to the system that holds the
@@ -217,6 +238,7 @@ final _schema = [
   ..._migrate8to9,
   ..._v10Tables,
   ..._v11Tables,
+  ..._v12Tables,
   ..._v3Tables,
   ..._v5Tables,
   ..._v6Tables,
@@ -231,7 +253,7 @@ final _schema = [
   'CREATE INDEX idx_tx_party ON transactions(party_id)',
   'CREATE INDEX idx_items_inv ON invoice_items(invoice_id)',
   for (final t in syncTables)
-    if (!const {'deliveries', 'delivery_items', 'orders', 'order_items', 'product_groups'}.contains(t)) 'CREATE INDEX idx_${t}_seq ON $t(seq)',
+    if (!const {'deliveries', 'delivery_items', 'orders', 'order_items', 'product_groups', 'warehouses', 'stock_moves'}.contains(t)) 'CREATE INDEX idx_${t}_seq ON $t(seq)',
 ];
 
 /// Orders made before orders could hold several products have one product in
@@ -361,6 +383,11 @@ class AppDb {
           }
           if (from < 11) {
             for (final q in _v11Tables) {
+              await db.execute(q);
+            }
+          }
+          if (from < 12) {
+            for (final q in _v12Tables) {
               await db.execute(q);
             }
           }

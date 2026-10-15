@@ -137,13 +137,27 @@ class InvoiceViewPage extends StatelessWidget {
           final (inv, items, party, txs) = d;
           if (inv == null) return const Scaffold(body: Center(child: Text('این فاکتور حذف شد.')));
           final info = inv.info;
-          Future<void> openPrint() => showPrintDialog(
-                c,
-                repo,
-                title: '${info.label} ${faDigits('${inv.number}')}',
-                filename: 'invoice-${inv.number}.pdf',
-                build: (s, f) => PdfDocs(repo, settings: s).invoice(inv, items, party, format: f),
-              );
+          Future<void> openPrint() {
+            String? tpl; // chosen for this print only; null: the one from Settings
+            return showPrintDialog(
+              c,
+              repo,
+              title: '${info.label} ${faDigits('${inv.number}')}',
+              filename: 'invoice-${inv.number}.pdf',
+              build: (s, f) => PdfDocs(repo, settings: s).invoice(inv, items, party, format: f, template: tpl),
+              options: (ctx, refresh) => Wrap(spacing: 8, runSpacing: 4, children: [
+                for (final (id, title) in PdfDocs.invoiceTemplates)
+                  ChoiceChip(
+                    label: Text(title),
+                    selected: (tpl ?? repo.setting('invoice_template', 'classic')) == id,
+                    onSelected: (_) {
+                      tpl = id;
+                      refresh();
+                    },
+                  ),
+              ]),
+            );
+          }
           Future<void> printRoll() => showPrintDialog(
                 c,
                 repo,
@@ -350,6 +364,9 @@ class _InvoiceEditPageState extends State<InvoiceEditPage> {
   Map<String, double> originalQty = {};
   List<Order> orders = [];
   String? orderId, originalOrderId;
+  List<Warehouse> warehouses = [];
+  String warehouseId = mainWarehouseId, originalWarehouse = mainWarehouseId;
+  Map<String, double> whStock = {};
   int ownPrepaid = 0;
   String autoNumber = '';
   String? originalKind;
@@ -375,8 +392,11 @@ class _InvoiceEditPageState extends State<InvoiceEditPage> {
   Future<void> _load() async {
     parties = await repo.parties();
     products = await repo.products();
+    warehouses = await repo.warehouses();
     if (widget.invoiceId != null) {
       final inv = (await repo.invoices()).firstWhere((i) => i.id == widget.invoiceId);
+      warehouseId = inv.warehouseId ?? mainWarehouseId;
+      originalWarehouse = warehouseId;
       kind = inv.kind;
       originalKind = inv.kind;
       date = inv.date;
@@ -400,9 +420,18 @@ class _InvoiceEditPageState extends State<InvoiceEditPage> {
       tax.text = repo.setting('default_tax', '0');
       lines.add(_Line());
     }
+    await _loadWarehouseStock();
     await _loadOrders();
     if (widget.invoiceId == null && orderId != null) _pickOrder(orderId);
     if (mounted) setState(() => loaded = true);
+  }
+
+  bool get multiWarehouse => warehouses.length > 1;
+
+  Future<void> _loadWarehouseStock() async {
+    if (!multiWarehouse) return;
+    final m = await repo.stockIn(warehouseId);
+    if (mounted) setState(() => whStock = m);
   }
 
   /// Open orders of the chosen customer, to take an advance payment from.
@@ -456,9 +485,9 @@ class _InvoiceEditPageState extends State<InvoiceEditPage> {
 
   double _available(Product p) {
     // Stock already counts this invoice's saved quantities; add them back.
-    var s = p.stock;
+    var s = multiWarehouse ? (whStock[p.id] ?? 0) : p.stock;
     final orig = originalQty[p.id];
-    if (orig != null && originalKind != null) {
+    if (orig != null && originalKind != null && (!multiWarehouse || originalWarehouse == warehouseId)) {
       final wasIn = invoiceKind(originalKind!).stockIn;
       s += wasIn ? -orig : orig;
     }
@@ -506,6 +535,19 @@ class _InvoiceEditPageState extends State<InvoiceEditPage> {
                   });
                 },
               ),
+              if (multiWarehouse) ...[
+                gap(),
+                DropdownButtonFormField<String>(
+                  key: ValueKey('wh$warehouseId'),
+                  initialValue: warehouseId,
+                  decoration: InputDecoration(labelText: info.stockIn ? 'ورود به انبار' : 'خروج از انبار'),
+                  items: [for (final w in warehouses) DropdownMenuItem(value: w.id, child: Text(w.name))],
+                  onChanged: (v) async {
+                    setState(() => warehouseId = v ?? mainWarehouseId);
+                    await _loadWarehouseStock();
+                  },
+                ),
+              ],
               gap(),
               Row(children: [
                 Expanded(
@@ -700,7 +742,7 @@ class _InvoiceEditPageState extends State<InvoiceEditPage> {
                             ListTile(
                               dense: true,
                               title: Text(p.name),
-                              subtitle: Text('موجودی ${qtyText(p.stock)} ${p.unit} • ${money(kind.startsWith('purchase') ? p.buyPrice : p.salePrice)}'),
+                              subtitle: Text('موجودی ${qtyText(multiWarehouse ? (whStock[p.id] ?? 0) : p.stock)} ${p.unit} • ${money(kind.startsWith('purchase') ? p.buyPrice : p.salePrice)}'),
                               onTap: () => onSel(p),
                             ),
                         ],
@@ -778,6 +820,7 @@ class _InvoiceEditPageState extends State<InvoiceEditPage> {
         for (final l in lines) InvoiceItem(l.title.text.trim(), l.q, parseAmount(l.price.text), productId: l.productId),
       ],
       orderId: kind == 'sale' ? orderId : null,
+      warehouseId: warehouseId,
     );
     if (mounted) Navigator.pop(context);
   }

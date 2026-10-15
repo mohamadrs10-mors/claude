@@ -345,6 +345,8 @@ class _SettingsPageState extends State<SettingsPage> {
               gap(16),
               if (!who.client) ...[PeriodLockSection(repo: repo), gap(16)],
               LogoSection(repo: repo),
+              gap(16),
+              InvoiceTemplateSection(repo: repo),
               if (!who.client) ...[gap(16), SecuritySection(repo: repo, lock: widget.lock)],
               gap(16),
               BackupSection(repo: repo, backups: widget.backups),
@@ -352,7 +354,7 @@ class _SettingsPageState extends State<SettingsPage> {
               CsvSection(repo: repo),
             ],
             gap(16),
-            const Section(title: 'دربارهٔ برنامه', child: Text('MORS ACC • نسخهٔ ۱٫۱۳\nفونت وزیرمتن (مجوز OFL)')),
+            const Section(title: 'دربارهٔ برنامه', child: Text('MORS ACC • نسخهٔ ۱٫۱۴\nفونت وزیرمتن (مجوز OFL)')),
           ]),
         );
         },

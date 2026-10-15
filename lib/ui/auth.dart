@@ -12,7 +12,7 @@ import '../sync/sync_service.dart';
 
 /// Who is using the app right now and what they may do.
 class Identity {
-  Identity({required this.access, this.display = '', this.roleName = '', this.userId = '', this.admin, this.logout, this.client = false});
+  Identity({required this.access, this.display = '', this.roleName = '', this.userId = '', this.admin, this.logout, this.client = false, this.mobile = false});
 
   final Access access;
   final String display, roleName, userId;
@@ -29,6 +29,9 @@ class Identity {
 
   /// Working over the network on a server's data.
   final bool client;
+
+  /// An offline copy on a phone that synchronises with a server.
+  final bool mobile;
 
   bool get signedIn => logout != null;
 

@@ -9,7 +9,7 @@ import 'db_ops.dart';
 const lockSettingKey = 'lock_until';
 
 /// Tables whose rows have a date, and the child tables that follow their parent.
-const _dated = {'invoices', 'transactions', 'deliveries', 'orders'};
+const _dated = {'invoices', 'transactions', 'deliveries', 'orders', 'stock_moves'};
 const _children = {'invoice_items': ('invoices', 'invoice_id'), 'delivery_items': ('deliveries', 'delivery_id'), 'order_items': ('orders', 'order_id')};
 
 /// What the activity log writes down: table -> title.
