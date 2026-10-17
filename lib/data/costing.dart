@@ -164,7 +164,7 @@ class Pricing {
 /// numbers, + - * / ^, parentheses, `25%`, variables and a few functions
 /// (round, ceil, floor, abs, sqrt, min, max). No code is ever executed.
 class Expr {
-  static const functions = {'round', 'ceil', 'floor', 'abs', 'sqrt', 'min', 'max'};
+  static const functions = {'round', 'ceil', 'floor', 'abs', 'sqrt', 'min', 'max', 'if'};
 
   static double evaluate(String source, Map<String, double> vars) {
     final p = _Parser(_normalize(source), vars);
@@ -214,7 +214,28 @@ class _Parser {
     return v;
   }
 
+  bool _eatStr(String t) {
+    _ws();
+    if (s.startsWith(t, i)) {
+      i += t.length;
+      return true;
+    }
+    return false;
+  }
+
+  /// Comparisons (> < >= <= == !=) give 1 or 0, so `if(hours > 160, 1.5, 1)` works.
   double _expr() {
+    final v = _sum();
+    if (_eatStr('>=')) return v >= _sum() ? 1 : 0;
+    if (_eatStr('<=')) return v <= _sum() ? 1 : 0;
+    if (_eatStr('==')) return v == _sum() ? 1 : 0;
+    if (_eatStr('!=')) return v != _sum() ? 1 : 0;
+    if (_eatStr('>')) return v > _sum() ? 1 : 0;
+    if (_eatStr('<')) return v < _sum() ? 1 : 0;
+    return v;
+  }
+
+  double _sum() {
     var v = _term();
     while (true) {
       if (_eat('+')) {
@@ -319,6 +340,9 @@ class _Parser {
       case 'sqrt':
         need(1);
         return math.sqrt(a[0]);
+      case 'if':
+        need(3);
+        return a[0] != 0 ? a[1] : a[2]; // if(condition, then, else)
       case 'min':
         if (a.length < 2) _fail('تابع min حداقل دو ورودی می‌خواهد');
         return a.reduce(math.min);

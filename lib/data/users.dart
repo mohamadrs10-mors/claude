@@ -59,6 +59,8 @@ class UserStore {
     final id = r['id'] as String;
     // The administrator role always has every permission, even new ones.
     final perms = id == 'admin' ? allPermissions.toSet() : {for (final p in (jsonDecode(r['perms'] as String) as List)) '$p'};
+    // The accountant also keeps the payroll section that came after the role was made.
+    if (id == 'accountant') perms.addAll({permView('payroll'), permEdit('payroll')});
     return Role(id, r['name'] as String, perms, builtin: (r['builtin'] as int) == 1);
   }
 

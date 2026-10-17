@@ -9,7 +9,7 @@ import 'db_ops.dart';
 const lockSettingKey = 'lock_until';
 
 /// Tables whose rows have a date, and the child tables that follow their parent.
-const _dated = {'invoices', 'transactions', 'deliveries', 'orders', 'stock_moves'};
+const _dated = {'invoices', 'transactions', 'deliveries', 'orders', 'stock_moves', 'attendance'};
 const _children = {'invoice_items': ('invoices', 'invoice_id'), 'delivery_items': ('deliveries', 'delivery_id'), 'order_items': ('orders', 'order_id')};
 
 /// What the activity log writes down: table -> title.
@@ -29,6 +29,9 @@ const auditTables = {
   'settings': 'تنظیمات',
   'warehouses': 'انبار',
   'stock_moves': 'حرکت انبار',
+  'employees': 'کارمند',
+  'attendance': 'حضور و غیاب',
+  'payslips': 'فیش حقوقی',
 };
 
 String _invoiceKind(String k) => switch (k) {
@@ -104,6 +107,10 @@ Future<String> describeRow(DatabaseExecutor ex, String table, Map<String, Object
       return 'چک ${s('number')} ${money(r['amount'] as num? ?? 0)}'.trim();
     case 'settings':
       return s('id');
+    case 'attendance':
+      return '${s('date')} ${s('in_time')}-${s('out_time')}';
+    case 'payslips':
+      return 'فیش ${faDigits(s('year'))}/${faDigits(s('month'))} • خالص ${money(r['net'] as num? ?? 0)}';
     case 'stock_moves':
       return s('kind') == 'transfer' ? 'انتقال بین انبارها' : 'تعدیل موجودی';
     default:

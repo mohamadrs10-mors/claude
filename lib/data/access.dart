@@ -25,6 +25,7 @@ const permAreas = <(String, String)>[
   ('parties', 'اشخاص'),
   ('cheques', 'چک‌ها'),
   ('accounts', 'حساب‌ها'),
+  ('payroll', 'حقوق و دستمزد'),
   ('reports', 'گزارش‌ها'),
 ];
 
@@ -145,7 +146,11 @@ const _tableWriters = <String, List<String>>{
   'cheques': ['cheques.edit', 'orders.edit'],
   'invoices': ['invoices.edit'],
   'invoice_items': ['invoices.edit'],
-  'transactions': ['transactions.edit', 'orders.edit', 'cheques.edit'],
+  'transactions': ['transactions.edit', 'orders.edit', 'cheques.edit', 'payroll.edit'],
+  'employees': ['payroll.edit'],
+  'attendance': ['payroll.edit'],
+  'payslips': ['payroll.edit'],
+  'payroll_items': ['payroll.edit'],
   'orders': ['orders.edit'],
   'order_items': ['orders.edit'],
   'deliveries': ['deliveries.edit'],

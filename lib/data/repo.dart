@@ -977,6 +977,8 @@ class Repo extends ChangeNotifier {
     String? invoiceId,
     String description = '',
     String? toAccountId,
+    String? payslipId,
+    String? employeeId,
   }) async {
     final txId = id ?? AppDb.newId();
     await store.save('transactions', {
@@ -984,6 +986,7 @@ class Repo extends ChangeNotifier {
       'date': date, 'kind': kind, 'amount': amount, 'account_id': accountId,
       'party_id': partyId, 'category_id': categoryId, 'invoice_id': invoiceId,
       'description': description, 'to_account_id': toAccountId,
+      'payslip_id': payslipId, 'employee_id': employeeId,
     });
     changed();
     return txId;

@@ -32,6 +32,7 @@ import 'ui/invoices_page.dart';
 import 'ui/orders_page.dart';
 import 'ui/lock_screen.dart';
 import 'ui/parties_page.dart';
+import 'ui/payroll_page.dart';
 import 'ui/products_page.dart';
 import 'ui/reports_page.dart';
 import 'ui/settings_page.dart';
@@ -217,6 +218,7 @@ const _dests = [
   _Dest('parties', 'اشخاص', Icons.people_outline, Icons.people),
   _Dest('cheques', 'چک‌ها', Icons.payments_outlined, Icons.payments),
   _Dest('accounts', 'حساب‌ها', Icons.account_balance_wallet_outlined, Icons.account_balance_wallet),
+  _Dest('payroll', 'حقوق و دستمزد', Icons.badge_outlined, Icons.badge),
   _Dest('reports', 'گزارش‌ها', Icons.bar_chart_outlined, Icons.bar_chart),
   _Dest('mobilesync', 'همگام‌سازی با سرور', Icons.cloud_sync_outlined, Icons.cloud_sync),
   _Dest('sync', 'همگام‌سازی', Icons.sync, Icons.sync),
@@ -284,6 +286,7 @@ class _HomePageState extends State<HomePage> {
         'parties' => PartiesPage(repo: widget.repo),
         'cheques' => ChequesPage(repo: widget.repo),
         'accounts' => AccountsPage(repo: widget.repo),
+        'payroll' => PayrollPage(repo: widget.repo),
         'reports' => ReportsPage(repo: widget.repo),
         'mobilesync' => MobileSyncPage(repo: widget.repo, mobile: widget.mobile!, net: widget.net),
         'sync' => SyncPage(repo: widget.repo, sync: widget.sync, companies: widget.companies),

@@ -29,9 +29,13 @@ const syncTables = [
   'product_groups',
   'warehouses',
   'stock_moves',
+  'employees',
+  'attendance',
+  'payslips',
+  'payroll_items',
 ];
 
-const _schemaVersion = 14;
+const _schemaVersion = 15;
 
 const _v2Tables = [
   '''CREATE TABLE products (
@@ -121,6 +125,48 @@ const _v10Tables = [
   '''CREATE TABLE users (
     id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE, full_name TEXT NOT NULL DEFAULT '', role_id TEXT NOT NULL,
     salt TEXT NOT NULL, hash TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT '')''',
+];
+
+/// Payroll (حقوق و دستمزد): people on the payroll, their time clock entries,
+/// monthly payslips with their additions/deductions, and the links from
+/// payments (and advances) to them.
+const _v15Tables = [
+  '''CREATE TABLE employees (
+    id TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
+    device_id TEXT NOT NULL, seq INTEGER NOT NULL,
+    name TEXT NOT NULL, phone TEXT NOT NULL DEFAULT '', pay_type TEXT NOT NULL DEFAULT 'monthly',
+    base_amount INTEGER NOT NULL DEFAULT 0, attendance_based INTEGER NOT NULL DEFAULT 0,
+    daily_hours REAL NOT NULL DEFAULT 8, overtime_rate REAL NOT NULL DEFAULT 0, insurance_percent REAL NOT NULL DEFAULT 0,
+    formula TEXT NOT NULL DEFAULT '', contract_months INTEGER NOT NULL DEFAULT 0, off_days TEXT NOT NULL DEFAULT '5',
+    start_date TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1, note TEXT NOT NULL DEFAULT '')''',
+  '''CREATE TABLE attendance (
+    id TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
+    device_id TEXT NOT NULL, seq INTEGER NOT NULL,
+    employee_id TEXT NOT NULL, date TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'work',
+    in_time TEXT NOT NULL DEFAULT '', out_time TEXT NOT NULL DEFAULT '', minutes INTEGER NOT NULL DEFAULT 0,
+    note TEXT NOT NULL DEFAULT '')''',
+  '''CREATE TABLE payslips (
+    id TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
+    device_id TEXT NOT NULL, seq INTEGER NOT NULL,
+    employee_id TEXT NOT NULL, year INTEGER NOT NULL, month INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'draft',
+    pay_type TEXT NOT NULL DEFAULT 'monthly', worked_min INTEGER NOT NULL DEFAULT 0, leave_min INTEGER NOT NULL DEFAULT 0,
+    overtime_min INTEGER NOT NULL DEFAULT 0, required_min INTEGER NOT NULL DEFAULT 0,
+    base_pay INTEGER NOT NULL DEFAULT 0, overtime_pay INTEGER NOT NULL DEFAULT 0, additions INTEGER NOT NULL DEFAULT 0,
+    deductions INTEGER NOT NULL DEFAULT 0, insurance INTEGER NOT NULL DEFAULT 0, net INTEGER NOT NULL DEFAULT 0,
+    manual_base INTEGER, note TEXT NOT NULL DEFAULT '')''',
+  '''CREATE TABLE payroll_items (
+    id TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
+    device_id TEXT NOT NULL, seq INTEGER NOT NULL,
+    payslip_id TEXT NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL, amount INTEGER NOT NULL DEFAULT 0, tx_id TEXT)''',
+  'CREATE INDEX idx_attendance_emp_date ON attendance(employee_id, date)',
+  'CREATE INDEX idx_payslips_emp ON payslips(employee_id, year, month)',
+  'CREATE INDEX idx_payroll_items_slip ON payroll_items(payslip_id)',
+  'CREATE INDEX idx_employees_seq ON employees(seq)',
+  'CREATE INDEX idx_attendance_seq ON attendance(seq)',
+  'CREATE INDEX idx_payslips_seq ON payslips(seq)',
+  'CREATE INDEX idx_payroll_items_seq ON payroll_items(seq)',
+  'ALTER TABLE transactions ADD COLUMN payslip_id TEXT',
+  'ALTER TABLE transactions ADD COLUMN employee_id TEXT',
 ];
 
 /// Payment due date of an invoice (سررسید) and indexes that keep lists and
@@ -272,8 +318,9 @@ final _schema = [
   'CREATE INDEX idx_tx_party ON transactions(party_id)',
   'CREATE INDEX idx_items_inv ON invoice_items(invoice_id)',
   for (final t in syncTables)
-    if (!const {'deliveries', 'delivery_items', 'orders', 'order_items', 'product_groups', 'warehouses', 'stock_moves'}.contains(t)) 'CREATE INDEX idx_${t}_seq ON $t(seq)',
+    if (!const {'deliveries', 'delivery_items', 'orders', 'order_items', 'product_groups', 'warehouses', 'stock_moves', 'employees', 'attendance', 'payslips', 'payroll_items'}.contains(t)) 'CREATE INDEX idx_${t}_seq ON $t(seq)',
   ..._v14Tables, // after the tables its indexes belong to
+  ..._v15Tables,
 ];
 
 /// Orders made before orders could hold several products have one product in
@@ -424,6 +471,11 @@ class AppDb {
                 // An index is only a speed-up; never let it stop an upgrade.
                 if (!q.startsWith('CREATE INDEX')) rethrow;
               }
+            }
+          }
+          if (from < 15) {
+            for (final q in _v15Tables) {
+              await db.execute(q);
             }
           }
         },

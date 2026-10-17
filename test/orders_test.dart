@@ -218,6 +218,11 @@ void main() {
       await raw.execute('DROP INDEX IF EXISTS $i'); // version 14
     }
     await raw.execute('ALTER TABLE invoices DROP COLUMN due_date');
+    for (final t in ['employees', 'attendance', 'payslips', 'payroll_items']) {
+      await raw.execute('DROP TABLE $t'); // version 15
+    }
+    await raw.execute('ALTER TABLE transactions DROP COLUMN payslip_id');
+    await raw.execute('ALTER TABLE transactions DROP COLUMN employee_id');
     await raw.execute('ALTER TABLE products DROP COLUMN group_id');
     await raw.execute(
         "INSERT INTO cheques (id, updated_at, deleted, device_id, seq, kind, number, bank, amount, due_date, status)"
