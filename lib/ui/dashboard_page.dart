@@ -53,6 +53,17 @@ class DashboardPage extends StatelessWidget {
                   ),
                   const SizedBox(height: 16),
                   Wrap(spacing: 12, runSpacing: 12, children: [
+                    if (d.recurringDue.isNotEmpty)
+                      SizedBox(
+                        width: box.maxWidth - 32,
+                        child: Section(
+                          title: 'هزینه‌های ثابت این ماه که هنوز ثبت نشده (${faDigits('${d.recurringDue.length}')})',
+                          trailing: TextButton(onPressed: () => onNavigate('expenses'), child: const Text('ثبت هزینه‌ها')),
+                          child: Wrap(spacing: 8, runSpacing: 6, children: [
+                            for (final (t, a) in d.recurringDue.take(8)) Chip(label: Text('$t • ${money(a)}')),
+                          ]),
+                        ),
+                      ),
                     if (d.overdue.isNotEmpty)
                       SizedBox(
                         width: box.maxWidth - 32,

@@ -33,9 +33,10 @@ const syncTables = [
   'attendance',
   'payslips',
   'payroll_items',
+  'recurring_expenses',
 ];
 
-const _schemaVersion = 15;
+const _schemaVersion = 16;
 
 const _v2Tables = [
   '''CREATE TABLE products (
@@ -125,6 +126,18 @@ const _v10Tables = [
   '''CREATE TABLE users (
     id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE, full_name TEXT NOT NULL DEFAULT '', role_id TEXT NOT NULL,
     salt TEXT NOT NULL, hash TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT '')''',
+];
+
+/// Standing monthly expenses (هزینهٔ ثابت: اجاره، اینترنت...) that are
+/// registered with one tap each month.
+const _v16Tables = [
+  '''CREATE TABLE recurring_expenses (
+    id TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
+    device_id TEXT NOT NULL, seq INTEGER NOT NULL,
+    title TEXT NOT NULL, category_id TEXT, amount INTEGER NOT NULL DEFAULT 0, account_id TEXT,
+    day INTEGER NOT NULL DEFAULT 1, active INTEGER NOT NULL DEFAULT 1, last_month INTEGER NOT NULL DEFAULT 0,
+    note TEXT NOT NULL DEFAULT '')''',
+  'CREATE INDEX idx_recurring_expenses_seq ON recurring_expenses(seq)',
 ];
 
 /// Payroll (حقوق و دستمزد): people on the payroll, their time clock entries,
@@ -318,9 +331,10 @@ final _schema = [
   'CREATE INDEX idx_tx_party ON transactions(party_id)',
   'CREATE INDEX idx_items_inv ON invoice_items(invoice_id)',
   for (final t in syncTables)
-    if (!const {'deliveries', 'delivery_items', 'orders', 'order_items', 'product_groups', 'warehouses', 'stock_moves', 'employees', 'attendance', 'payslips', 'payroll_items'}.contains(t)) 'CREATE INDEX idx_${t}_seq ON $t(seq)',
+    if (!const {'deliveries', 'delivery_items', 'orders', 'order_items', 'product_groups', 'warehouses', 'stock_moves', 'employees', 'attendance', 'payslips', 'payroll_items', 'recurring_expenses'}.contains(t)) 'CREATE INDEX idx_${t}_seq ON $t(seq)',
   ..._v14Tables, // after the tables its indexes belong to
   ..._v15Tables,
+  ..._v16Tables,
 ];
 
 /// Orders made before orders could hold several products have one product in
@@ -475,6 +489,11 @@ class AppDb {
           }
           if (from < 15) {
             for (final q in _v15Tables) {
+              await db.execute(q);
+            }
+          }
+          if (from < 16) {
+            for (final q in _v16Tables) {
               await db.execute(q);
             }
           }

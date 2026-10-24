@@ -221,6 +221,7 @@ void main() {
     for (final t in ['employees', 'attendance', 'payslips', 'payroll_items']) {
       await raw.execute('DROP TABLE $t'); // version 15
     }
+    await raw.execute('DROP TABLE recurring_expenses'); // version 16
     await raw.execute('ALTER TABLE transactions DROP COLUMN payslip_id');
     await raw.execute('ALTER TABLE transactions DROP COLUMN employee_id');
     await raw.execute('ALTER TABLE products DROP COLUMN group_id');

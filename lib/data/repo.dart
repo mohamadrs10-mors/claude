@@ -485,6 +485,7 @@ class Dashboard {
     required this.lowStock,
     required this.dueCheques,
     required this.overdue,
+    required this.recurringDue,
     required this.recent,
     required this.names,
   });
@@ -497,6 +498,9 @@ class Dashboard {
 
   /// Unpaid invoices past their due date, oldest due date first.
   final List<Invoice> overdue;
+
+  /// Standing expenses (rent...) not yet registered for the current month: (title, amount).
+  final List<(String, int)> recurringDue;
   final List<Tx> recent;
   final Map<String, String> names; // party/account id -> name
 }
@@ -1997,6 +2001,12 @@ class Repo extends ChangeNotifier {
     return [for (final i in await invoices()) if (i.overdueAt(today)) i]..sort((a, b) => a.dueDate!.compareTo(b.dueDate!));
   }
 
+  Future<List<(String, int)>> _recurringDueNow() async {
+    final n = Jalali.now();
+    final rows = await store.db.query('recurring_expenses', where: 'deleted=0 AND active=1 AND last_month<?', whereArgs: [n.year * 100 + n.month]);
+    return [for (final r in rows) (r['title'] as String, r['amount'] as int)];
+  }
+
   Future<Dashboard> dashboard() async {
     final accs = await accounts();
     final parts = await parties();
@@ -2027,6 +2037,7 @@ class Repo extends ChangeNotifier {
       lowStock: (await products()).where((p) => p.low).toList(),
       dueCheques: pending.where((c) => c.dueDate.compareTo(soon) <= 0).toList(),
       overdue: await overdueInvoices(),
+      recurringDue: await _recurringDueNow(),
       recent: await transactions(limit: 6),
       names: {for (final p in parts) p.id: p.name, for (final a in accs) a.id: a.name},
     );

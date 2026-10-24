@@ -27,6 +27,7 @@ import 'ui/cheques_page.dart';
 import 'ui/companies_page.dart';
 import 'ui/costing_page.dart';
 import 'ui/dashboard_page.dart';
+import 'ui/expenses_page.dart';
 import 'ui/deliveries_page.dart';
 import 'ui/invoices_page.dart';
 import 'ui/orders_page.dart';
@@ -209,6 +210,7 @@ class _Dest {
 const _dests = [
   _Dest('dashboard', 'داشبورد', Icons.space_dashboard_outlined, Icons.space_dashboard),
   _Dest('transactions', 'تراکنش‌ها', Icons.swap_vert, Icons.swap_vert),
+  _Dest('expenses', 'هزینه‌ها', Icons.receipt_outlined, Icons.receipt),
   _Dest('invoices', 'فاکتورها', Icons.receipt_long_outlined, Icons.receipt_long),
   _Dest('orders', 'سفارش و پیش‌دریافت', Icons.assignment_outlined, Icons.assignment),
   _Dest('deliveries', 'رسید تحویل', Icons.local_shipping_outlined, Icons.local_shipping),
@@ -234,6 +236,7 @@ List<_Dest> _visibleDests(Identity who) => [
       for (final d in _dests)
         if (switch (d.id) {
           'warehouses' => who.canView('products'),
+          'expenses' => who.canView('transactions'),
           'mobilesync' => who.mobile,
           'sync' || 'companies' || 'network' => !who.client && who.can(permSettings),
           'users' => who.can(permUsers),
@@ -277,6 +280,7 @@ class _HomePageState extends State<HomePage> {
   Widget _body() => switch (page) {
         'dashboard' => DashboardPage(repo: widget.repo, onNavigate: _go),
         'transactions' => TransactionsPage(repo: widget.repo),
+        'expenses' => ExpensesPage(repo: widget.repo),
         'invoices' => InvoicesPage(repo: widget.repo),
         'orders' => OrdersPage(repo: widget.repo),
         'deliveries' => DeliveriesPage(repo: widget.repo),

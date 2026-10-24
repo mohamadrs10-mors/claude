@@ -147,6 +147,7 @@ const _tableWriters = <String, List<String>>{
   'invoices': ['invoices.edit'],
   'invoice_items': ['invoices.edit'],
   'transactions': ['transactions.edit', 'orders.edit', 'cheques.edit', 'payroll.edit'],
+  'recurring_expenses': ['transactions.edit'],
   'employees': ['payroll.edit'],
   'attendance': ['payroll.edit'],
   'payslips': ['payroll.edit'],

@@ -29,6 +29,7 @@ const auditTables = {
   'settings': 'تنظیمات',
   'warehouses': 'انبار',
   'stock_moves': 'حرکت انبار',
+  'recurring_expenses': 'هزینهٔ ثابت',
   'employees': 'کارمند',
   'attendance': 'حضور و غیاب',
   'payslips': 'فیش حقوقی',
