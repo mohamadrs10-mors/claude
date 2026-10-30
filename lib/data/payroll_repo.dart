@@ -443,4 +443,42 @@ extension PayrollRepo on Repo {
     final accrued = slips.fold<int>(0, (a, s) => a + s.calc.basePay);
     return (total: e.base, accrued: accrued, remaining: e.base - accrued);
   }
+
+  // ---- duplicates ---------------------------------------------------------
+
+  /// Number of time-clock entries per person (id -> count).
+  Future<Map<String, int>> attendanceCounts() async => {
+        for (final r in await store.db.rawQuery('SELECT employee_id AS id, COUNT(*) AS n FROM attendance WHERE deleted=0 GROUP BY employee_id')) r['id'] as String: r['n'] as int
+      };
+
+  /// People entered twice (the same name), e.g. one on each device before they
+  /// were synchronised. Each group lists the people with that name.
+  Future<List<List<Employee>>> duplicateEmployees() async {
+    final byName = <String, List<Employee>>{};
+    for (final e in await employees()) {
+      byName.putIfAbsent(e.name.trim().toLowerCase(), () => []).add(e);
+    }
+    return [for (final g in byName.values) if (g.length > 1) g];
+  }
+
+  /// Merges [dropId] into [keepId]: its time-clock entries, payslips, advances
+  /// and payments move to the person kept, then the duplicate is removed. Two
+  /// payslips for the same month cannot be merged (a message says which).
+  Future<void> mergeEmployees(String keepId, String dropId) async {
+    if (keepId == dropId) throw StateError('یک نفر را نمی‌شود با خودش ادغام کرد.');
+    final keep = await employee(keepId), drop = await employee(dropId);
+    if (keep == null || drop == null) throw StateError('شخص پیدا نشد.');
+    final keepSlips = {for (final s in await payslipsOf(keepId)) s.year * 100 + s.month};
+    final clash = [for (final s in await payslipsOf(dropId)) if (keepSlips.contains(s.year * 100 + s.month)) '${s.year}/${s.month}'];
+    if (clash.isNotEmpty) throw StateError('برای هر دو نفر فیش ماه ${clash.join('، ')} هست؛ اول یکی از آن فیش‌ها را حذف کنید.');
+    await store.db.transaction((tx) async {
+      for (final t in ['attendance', 'payslips', 'transactions']) {
+        for (final r in await tx.query(t, where: 'employee_id=? AND deleted=0', whereArgs: [dropId])) {
+          await store.save(t, {...r, 'employee_id': keepId}, exec: tx);
+        }
+      }
+      await store.softDelete('employees', dropId, exec: tx);
+    });
+    changed();
+  }
 }

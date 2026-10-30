@@ -73,34 +73,94 @@ class EmployeesTab extends StatelessWidget {
   const EmployeesTab({super.key, required this.repo});
   final Repo repo;
 
+  Future<void> _merge(BuildContext context, List<Employee> group, Map<String, int> counts) async {
+    // Keep the one with the most time-clock entries by default.
+    var keep = ([...group]..sort((a, b) => (counts[b.id] ?? 0).compareTo(counts[a.id] ?? 0))).first.id;
+    String? error;
+    await showDialog<void>(
+      context: context,
+      builder: (dc) => StatefulBuilder(
+        builder: (dc, set) => AlertDialog(
+          title: Text('ادغام «${group.first.name}»'),
+          content: SizedBox(
+            width: 420,
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('این نام چند بار ثبت شده (مثلاً یک بار روی هر دستگاه). ساعت‌های ورود و خروج، فیش‌ها و مساعده‌های بقیه به نفری که نگه می‌دارید منتقل می‌شود و تکراری‌ها حذف می‌شوند.', style: Theme.of(dc).textTheme.bodySmall),
+              gap(),
+              RadioGroup<String>(
+                groupValue: keep,
+                onChanged: (v) => set(() => keep = v ?? keep),
+                child: Column(children: [
+                  for (final e in group)
+                    RadioListTile<String>(value: e.id, title: Text(e.name), subtitle: Text('${e.payText} • ${faDigits('${counts[e.id] ?? 0}')} ردیف حضور')),
+                ]),
+              ),
+              if (error != null) Text(error!, style: TextStyle(color: Theme.of(dc).colorScheme.error)),
+            ]),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dc), child: const Text('انصراف')),
+            FilledButton(
+              onPressed: () async {
+                try {
+                  for (final e in group) {
+                    if (e.id != keep) await repo.mergeEmployees(keep, e.id);
+                  }
+                  if (dc.mounted) Navigator.pop(dc);
+                } catch (err) {
+                  set(() => error = _msg(err));
+                }
+              },
+              child: const Text('ادغام'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final canEdit = AccessScope.of(context).canEdit('payroll');
-    return RepoBuilder<List<Employee>>(
+    return RepoBuilder<(List<Employee>, Map<String, int>, List<List<Employee>>)>(
       repo: repo,
-      load: repo.employees,
-      builder: (c, list) => Scaffold(
-        body: Constrained(
-          child: list.isEmpty
-              ? emptyState('هنوز کسی ثبت نشده است.\nبا «کارمند جدید» شروع کنید؛ برای هر نفر شیوهٔ پرداخت جداگانه تعیین می‌شود (ماهانه، ساعتی، قراردادی یا فرمول دلخواه).')
-              : ListView.separated(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 96),
-                  itemCount: list.length,
-                  separatorBuilder: (_, _) => const Divider(height: 1),
-                  itemBuilder: (_, i) {
-                    final e = list[i];
-                    return ListTile(
-                      leading: CircleAvatar(child: Text(e.name.characters.first)),
-                      title: Text(e.name, style: const TextStyle(fontWeight: FontWeight.w600)),
-                      subtitle: Text(e.payText),
-                      trailing: e.active ? null : StatusChip('غیرفعال', Colors.grey),
-                      onTap: !canEdit ? null : () => editEmployee(c, repo, e),
-                    );
-                  },
-                ),
-        ),
-        floatingActionButton: !canEdit ? null : FloatingActionButton.extended(onPressed: () => editEmployee(c, repo, null), icon: const Icon(Icons.person_add_alt), label: const Text('کارمند جدید')),
-      ),
+      load: () async => (await repo.employees(), await repo.attendanceCounts(), await repo.duplicateEmployees()),
+      builder: (c, data) {
+        final (list, counts, dups) = data;
+        return Scaffold(
+          body: Constrained(
+            child: list.isEmpty
+                ? emptyState('هنوز کسی ثبت نشده است.\nبا «کارمند جدید» شروع کنید؛ برای هر نفر شیوهٔ پرداخت جداگانه تعیین می‌شود (ماهانه، ساعتی، قراردادی یا فرمول دلخواه).')
+                : ListView(padding: const EdgeInsets.fromLTRB(16, 12, 16, 96), children: [
+                    for (final g in dups)
+                      Card(
+                        color: Theme.of(c).colorScheme.tertiaryContainer,
+                        child: ListTile(
+                          leading: const Icon(Icons.merge_type),
+                          title: Text('«${g.first.name}» ${faDigits('${g.length}')} بار ثبت شده است'),
+                          subtitle: const Text('ساعت‌های حضور ممکن است زیر نفر دیگری باشند؛ با ادغام همه یکی می‌شوند.'),
+                          trailing: !canEdit ? null : TextButton(onPressed: () => _merge(c, g, counts), child: const Text('ادغام')),
+                        ),
+                      ),
+                    Card(
+                      child: Column(children: [
+                        for (var i = 0; i < list.length; i++) ...[
+                          if (i > 0) const Divider(height: 1),
+                          ListTile(
+                            leading: CircleAvatar(child: Text(list[i].name.characters.first)),
+                            title: Text(list[i].name, style: const TextStyle(fontWeight: FontWeight.w600)),
+                            subtitle: Text('${list[i].payText} • ${faDigits('${counts[list[i].id] ?? 0}')} ردیف حضور'),
+                            trailing: list[i].active ? null : StatusChip('غیرفعال', Colors.grey),
+                            onTap: !canEdit ? null : () => editEmployee(c, repo, list[i]),
+                          ),
+                        ],
+                      ]),
+                    ),
+                  ]),
+          ),
+          floatingActionButton: !canEdit ? null : FloatingActionButton.extended(onPressed: () => editEmployee(c, repo, null), icon: const Icon(Icons.person_add_alt), label: const Text('کارمند جدید')),
+        );
+      },
     );
   }
 }

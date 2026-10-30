@@ -54,7 +54,7 @@ void main() {
     await settle(tester);
     final people = (await tester.runAsync(repo.employees))!;
     expect(people.single.payType, 'formula');
-    expect(find.text('فرمول دلخواه'), findsWidgets);
+    expect(find.textContaining('فرمول دلخواه'), findsWidgets);
 
     // A second person, monthly attendance-based (set up in the repo).
     late String bob;

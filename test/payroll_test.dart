@@ -284,4 +284,50 @@ void main() {
       await sb.stopServer();
     }
   });
+
+  test('the same person entered on two devices: after syncing they show twice, and merging brings the hours together', () async {
+    final a = await newRepo(), b = await newRepo();
+    a.companyId = b.companyId = 'c1';
+    final sa = SyncService(CompanyManager.forRepos({'c1': a}, DevicePrefs.memory()));
+    final sb = SyncService(CompanyManager.forRepos({'c1': b}, DevicePrefs.memory()));
+    await sb.startServer(port: 0);
+    await sa.setPairCode('1');
+    await sb.setPairCode('1');
+    try {
+      final onA = await a.saveEmployee(name: 'کارگر', payType: 'hourly', base: 100000);
+      final onB = await b.saveEmployee(name: 'کارگر', payType: 'hourly', base: 100000);
+      await a.saveAttendance(employeeId: onA, date: '2025-04-01', inTime: '08:00', outTime: '12:00');
+      await a.saveAttendance(employeeId: onA, date: '2025-04-02', inTime: '08:00', outTime: '12:00');
+      await b.saveAttendance(employeeId: onB, date: '2025-04-03', inTime: '08:00', outTime: '12:00');
+      await sa.syncWith(a, '127.0.0.1', port: sb.port!);
+      for (final r in [a, b]) {
+        expect((await r.employees()).length, 2); // the same name twice
+        final dups = await r.duplicateEmployees();
+        expect(dups.single.length, 2);
+        expect(((await r.attendanceCounts())[onA], (await r.attendanceCounts())[onB]), (2, 1));
+      }
+      // Merge on B: everything under the person with more entries; the other is gone on both devices.
+      await expectLater(b.mergeEmployees(onA, onA), throwsA(isA<StateError>()));
+      await b.mergeEmployees(onA, onB);
+      await sa.syncWith(a, '127.0.0.1', port: sb.port!);
+      await sa.syncWith(a, '127.0.0.1', port: sb.port!);
+      for (final r in [a, b]) {
+        expect((await r.employees()).map((e) => e.id), [onA]);
+        expect(await r.duplicateEmployees(), isEmpty);
+        expect((await r.attendanceOf(onA)).length, 3);
+      }
+      // Two payslips for the same month cannot be merged silently.
+      final x = await a.saveEmployee(name: 'نفر', payType: 'monthly', base: 1);
+      final y = await a.saveEmployee(name: 'نفر', payType: 'monthly', base: 1);
+      await a.savePayslip((await a.employee(x))!, 1404, 1);
+      await a.savePayslip((await a.employee(y))!, 1404, 1);
+      await expectLater(a.mergeEmployees(x, y), throwsA(isA<StateError>().having((e) => e.message, 'message', contains('1404/1'))));
+      await a.savePayslip((await a.employee(y))!, 1404, 2);
+      await a.deletePayslip((await a.payslipOf(y, 1404, 1))!.id);
+      await a.mergeEmployees(x, y);
+      expect((await a.payslipsOf(x)).map((s) => s.month).toSet(), {1, 2});
+    } finally {
+      await sb.stopServer();
+    }
+  });
 }
