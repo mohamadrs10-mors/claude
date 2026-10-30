@@ -7,7 +7,10 @@ import 'package:simple_accounting/data/db.dart';
 import 'package:simple_accounting/data/guard.dart';
 import 'package:simple_accounting/data/payroll.dart';
 import 'package:simple_accounting/data/payroll_repo.dart';
+import 'package:simple_accounting/data/company_manager.dart';
+import 'package:simple_accounting/data/device_prefs.dart';
 import 'package:simple_accounting/data/repo.dart';
+import 'package:simple_accounting/sync/sync_service.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 var _n = 0;
@@ -236,5 +239,49 @@ void main() {
     expect(Expr.evaluate('1 + (5 == 5)', {}), 2);
     expect(Expr.evaluate('(4 != 4) * 7', {}), 0);
     expect(Expr.evaluate('x <= 3', {'x': 3}), 1);
+  });
+
+  test('time clock across devices: hours survive syncs, and a closed entry is never reopened by a device whose clock is behind', () async {
+    final a = await newRepo(), b = await newRepo();
+    a.companyId = b.companyId = 'c1';
+    final sa = SyncService(CompanyManager.forRepos({'c1': a}, DevicePrefs.memory()));
+    final sb = SyncService(CompanyManager.forRepos({'c1': b}, DevicePrefs.memory()));
+    await sb.startServer(port: 0);
+    await sa.setPairCode('1');
+    await sb.setPairCode('1');
+    try {
+      final id = await a.saveEmployee(name: 'کارگر', payType: 'hourly', base: 100000);
+      await a.saveAttendance(employeeId: id, date: '2025-04-01', inTime: '08:00', outTime: '12:00');
+      await a.clockIn(id, now: DateTime(2025, 4, 2, 8));
+      await sa.syncWith(a, '127.0.0.1', port: sb.port!);
+      expect((await b.attendanceOf(id)).length, 2);
+      await b.clockOut(id, now: DateTime(2025, 4, 2, 16));
+      await b.saveAttendance(employeeId: id, date: '2025-04-03', inTime: '09:00', outTime: '13:00');
+      await a.saveAttendance(employeeId: id, date: '2025-04-04', inTime: '09:00', outTime: '17:00');
+      await sa.syncWith(a, '127.0.0.1', port: sb.port!);
+      await sa.syncWith(a, '127.0.0.1', port: sb.port!);
+      for (final r in [a, b]) {
+        expect((await r.attendanceOf(id)).map((e) => (e.date, e.minutes)).toList(), [('2025-04-01', 240), ('2025-04-02', 480), ('2025-04-03', 240), ('2025-04-04', 480)]);
+      }
+      // Device A's copy of the open entry is "newer" by its clock: it still must not undo the clock-out.
+      final open = (await a.attendanceOf(id)).firstWhere((e) => e.date == '2025-04-02');
+      final row = (await a.store.raw.query('attendance', where: 'id=?', whereArgs: [open.id])).single;
+      final stale = {...row, 'out_time': '', 'minutes': 0, 'updated_at': (row['updated_at'] as int) + 3600000, 'device_id': 'zzz-device'}..remove('seq');
+      final applied = await a.store.applyRemote({'attendance': [stale]});
+      expect(applied, 0);
+      expect((await a.attendanceOf(id)).firstWhere((e) => e.date == '2025-04-02').minutes, 480);
+      // The other way round: an older closed version does close a newer open one.
+      final openRow = {...row, 'out_time': '', 'minutes': 0, 'id': 'open-1', 'updated_at': (row['updated_at'] as int) + 7200000}..remove('seq');
+      await a.store.applyRemote({'attendance': [openRow]});
+      final closedOlder = {...openRow, 'out_time': '16:00', 'minutes': 480, 'updated_at': (row['updated_at'] as int) + 1000, 'device_id': 'aaa-device'};
+      expect(await a.store.applyRemote({'attendance': [closedOlder]}), 1);
+      expect((await a.store.raw.query('attendance', where: "id='open-1'")).single['out_time'], '16:00');
+      // A real deletion still wins by time.
+      final gone = {...closedOlder, 'deleted': 1, 'updated_at': (row['updated_at'] as int) + 9000000};
+      await a.store.applyRemote({'attendance': [gone]});
+      expect((await a.store.raw.query('attendance', where: "id='open-1'")).single['deleted'], 1);
+    } finally {
+      await sb.stopServer();
+    }
   });
 }

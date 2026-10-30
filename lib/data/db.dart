@@ -602,7 +602,7 @@ class AppDb {
             continue;
           }
           final cur = await tx.query(t,
-              columns: ['updated_at', 'device_id'],
+              columns: ['updated_at', 'device_id', if (t == 'attendance') 'out_time', if (t == 'attendance') 'deleted'],
               where: 'id=?',
               whereArgs: [row['id']]);
           if (cur.isNotEmpty) {
@@ -610,7 +610,15 @@ class AppDb {
             final cd = cur.first['device_id'] as String;
             final ru = row['updated_at'] as int;
             final rd = row['device_id'] as String;
-            final remoteWins = ru > cu || (ru == cu && rd.compareTo(cd) > 0);
+            var remoteWins = ru > cu || (ru == cu && rd.compareTo(cd) > 0);
+            // A time-clock entry that has been closed (clock-out) never goes back to
+            // "still at work" because of a device whose clock is behind: the closed
+            // version wins over the open one, whatever the timestamps say.
+            if (t == 'attendance' && cur.first['deleted'] == 0 && (row['deleted'] ?? 0) == 0) {
+              final localClosed = '${cur.first['out_time']}'.isNotEmpty, remoteClosed = '${row['out_time'] ?? ''}'.isNotEmpty;
+              if (localClosed && !remoteClosed) remoteWins = false;
+              if (!localClosed && remoteClosed) remoteWins = true;
+            }
             if (!remoteWins) continue;
           }
           row['seq'] = await _nextSeq(tx);
