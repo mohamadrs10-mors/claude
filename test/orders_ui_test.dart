@@ -36,6 +36,7 @@ void main() {
   flowTests();
   multiTests();
   chequeTests();
+  percentTests();
   testWidgets('order form: advance follows qty x price x percent, saves into the cash box without crediting the customer', (tester) async {
     tester.view.physicalSize = const Size(1000, 2600);
     tester.view.devicePixelRatio = 1;
@@ -225,5 +226,69 @@ void flowTests() {
     final inv = (await tester.runAsync(repo.invoices))!.single;
     expect((inv.total, inv.prepaid, inv.remaining), (40000, 20000, 20000));
     expect((await tester.runAsync(repo.parties))!.single.balance, 20000);
+  });
+}
+
+void percentTests() {
+  testWidgets('order form: typing the amount sets the percent from cash + cheques; typing the percent sets the amount again', (tester) async {
+    tester.view.physicalSize = const Size(1000, 3600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final repo = await seed(tester);
+    await tester.pumpWidget(MaterialApp(home: Directionality(textDirection: TextDirection.rtl, child: OrderEditPage(repo: repo))));
+    await settle(tester);
+    await tester.tap(find.widgetWithText(DropdownButtonFormField<String?>, 'مشتری'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('مشتری').last);
+    await tester.pumpAndSettle();
+    await tester.enterText(find.widgetWithText(TextFormField, 'کالا'), 'برنج');
+    await tester.enterText(field2(tester, 'تعداد سفارش'), '100');
+    await tester.enterText(field2(tester, 'قیمت واحد'), '1000'); // total 100000
+    await tester.pump();
+    expect(parseAmount(field(tester, 'مبلغ نقدی دریافت‌شده').text), 50000); // default 50 %
+
+    // The customer pays 70,000 in cash: the percent follows.
+    await tester.enterText(field2(tester, 'مبلغ نقدی دریافت‌شده'), '70000');
+    await tester.pump();
+    expect(parseNum(field(tester, 'درصد پیش‌دریافت').text), 70);
+    // A cheque of 10,000 on top: 80 % of the order is received.
+    await tester.tap(find.text('افزودن چک'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.widgetWithText(TextFormField, 'مبلغ چک'), '10000');
+    await tester.pump();
+    expect(parseNum(field(tester, 'درصد پیش‌دریافت').text), 80);
+    expect(parseAmount(field(tester, 'مبلغ نقدی دریافت‌شده').text), 70000); // the cash stays as typed
+    expect(find.textContaining('۸۰٪ از جمع سفارش'), findsOneWidget);
+    // A fraction is kept to two decimals.
+    await tester.enterText(find.widgetWithText(TextFormField, 'مبلغ چک'), '3333');
+    await tester.pump();
+    expect(parseNum(field(tester, 'درصد پیش‌دریافت').text), 73.33);
+    // Typing the percent again makes the cash follow it (minus the cheque).
+    await tester.enterText(field2(tester, 'درصد پیش‌دریافت'), '60');
+    await tester.pump();
+    expect(parseAmount(field(tester, 'مبلغ نقدی دریافت‌شده').text), 60000 - 3333);
+  });
+
+  testWidgets('editing a saved order: raising the cash amount raises the percent, and the order keeps it', (tester) async {
+    tester.view.physicalSize = const Size(1000, 3600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final repo = await seed(tester);
+    late String oid;
+    await tester.runAsync(() async {
+      final party = (await repo.parties()).single;
+      final acc = (await repo.accounts()).single;
+      oid = await repo.saveOrder(number: 1, date: todayIso(), partyId: party.id, percent: 50, advance: 50000, accountId: acc.id, items: [OrderItem('برنج', 100, 1000)]);
+    });
+    await tester.pumpWidget(MaterialApp(home: Directionality(textDirection: TextDirection.rtl, child: OrderEditPage(repo: repo, orderId: oid))));
+    await settle(tester);
+    expect(parseNum(field(tester, 'درصد پیش‌دریافت').text), 50);
+    await tester.enterText(field2(tester, 'مبلغ نقدی دریافت‌شده'), '80000');
+    await tester.pump();
+    expect(parseNum(field(tester, 'درصد پیش‌دریافت').text), 80);
+    await tester.tap(find.text('ذخیره سفارش'));
+    await settle(tester);
+    final o = (await tester.runAsync(repo.orders))!.single;
+    expect((o.percent, o.cash, o.advance), (80.0, 80000, 80000));
   });
 }

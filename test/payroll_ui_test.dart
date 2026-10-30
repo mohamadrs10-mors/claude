@@ -116,7 +116,8 @@ void main() {
     expect(slip.status, 'draft');
     expect(slip.items.single.amount, 500000);
     expect(slip.calc.workedMin, 570);
-    expect(slip.calc.overtimeMin, 90);
+    // On a day off (Friday by default) all of the work is overtime; otherwise what exceeds 8 hours.
+    expect(slip.calc.overtimeMin, DateTime.now().weekday == 5 ? 570 : 90);
     // Finalise, then pay all of it.
     await tester.tap(find.text('نهایی کردن'));
     await settle(tester);

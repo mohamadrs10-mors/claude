@@ -301,15 +301,25 @@ class _OrderEditPageState extends State<OrderEditPage> {
   String date = todayIso();
   String? partyId, accountId;
   bool loaded = false;
-  bool advanceTouched = false;
-  String _autoText = '';
+  // What the user changed last decides what follows: after typing the percent the
+  // cash amount follows it; after typing the amount (or a cheque) the percent
+  // follows the money received (cash + cheques) as a share of the order total.
+  String? _driver; // 'percent' | 'amount' | null (leave as loaded)
+  bool _busy = false;
 
   Repo get repo => widget.repo;
 
   @override
   void initState() {
     super.initState();
-    percent.addListener(_syncAdvance);
+    percent.addListener(() {
+      if (!_busy) _driver = 'percent';
+      _syncAdvance();
+    });
+    advance.addListener(() {
+      if (!_busy) _driver = 'amount';
+      _syncAdvance();
+    });
     _load();
   }
 
@@ -351,7 +361,7 @@ class _OrderEditPageState extends State<OrderEditPage> {
       date = o.date;
       partyId = o.partyId;
       percent.text = qtyText(o.percent);
-      advanceTouched = true;
+      _driver = null; // as saved, until the percent or the amounts are changed
       accountId = o.accountId;
       note.text = o.note;
       advance.text = money(o.cash);
@@ -362,6 +372,7 @@ class _OrderEditPageState extends State<OrderEditPage> {
     } else {
       number.text = '${await repo.nextOrderNumber()}';
       accountId = accounts.firstOrNull?.id;
+      _driver = 'percent';
     }
     if (lines.isEmpty) lines.add(_newLine());
     if (mounted) setState(() => loaded = true);
@@ -371,13 +382,25 @@ class _OrderEditPageState extends State<OrderEditPage> {
   int get _total => lines.fold(0, (a, l) => a + l.total);
   int get _chequeSum => chequeRows.fold(0, (a, r) => a + parseAmount(r.amount.text)) + _existingCheques;
 
-  /// The cash part follows total x percent minus the cheques until it is typed by hand.
+  /// Keeps percent and money consistent: either the cash amount follows the
+  /// percent (total x percent minus the cheques) or the percent follows what
+  /// was received (cash + cheques) / order total.
   void _syncAdvance() {
-    if (advanceTouched || !loaded) return;
-    final want = (_total * _pct / 100).round() - _chequeSum;
-    final v = want < 0 ? 0 : want;
-    _autoText = v == 0 ? '' : money(v);
-    advance.text = _autoText;
+    if (_busy || !loaded || _driver == null) return;
+    _busy = true;
+    try {
+      if (_driver == 'percent') {
+        final want = (_total * _pct / 100).round() - _chequeSum;
+        final v = want < 0 ? 0 : want;
+        advance.text = v == 0 ? '' : money(v);
+      } else if (_total > 0) {
+        final got = parseAmount(advance.text) + _chequeSum;
+        final pct = (got * 100 / _total).clamp(0, 100).toDouble();
+        percent.text = got == 0 ? '' : plainNum(double.parse(pct.toStringAsFixed(2)), decimals: 2);
+      }
+    } finally {
+      _busy = false;
+    }
   }
 
   void _pick(_OLine l, Product p) {
@@ -504,19 +527,28 @@ class _OrderEditPageState extends State<OrderEditPage> {
                   ),
                   const SizedBox(width: 12),
                   Expanded(
-                    // Once the amount is edited by hand it stops following the percent.
-                    child: Focus(
-                      onFocusChange: (f) {
-                        if (!f && advance.text != _autoText) advanceTouched = true;
-                      },
-                      child: AmountField(
-                        controller: advance,
-                        label: 'مبلغ نقدی دریافت‌شده',
-                        helper: 'خودکار از درصد (منهای چک‌ها)؛ اگر کمتر یا بیشتر گرفتید بنویسید',
-                      ),
+                    child: AmountField(
+                      controller: advance,
+                      label: 'مبلغ نقدی دریافت‌شده',
+                      helper: 'درصد را بنویسید تا مبلغ حساب شود، یا مبلغ را بنویسید تا درصد از روی دریافتی‌ها (نقد + چک) حساب شود',
                     ),
                   ),
                 ]),
+                ListenableBuilder(
+                  listenable: Listenable.merge([percent, advance, for (final l in lines) ...[l.qty, l.price], for (final r in chequeRows) r.amount]),
+                  builder: (c, _) {
+                    final got = parseAmount(advance.text) + _chequeSum;
+                    final over = _total > 0 && got > _total;
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Text(
+                        'جمع دریافتی (نقد + چک): ${moneyC(got)}${_total > 0 ? ' = ${faDigits(plainNum(double.parse((got * 100 / _total).toStringAsFixed(2)), decimals: 2))}٪ از جمع سفارش (${moneyC(_total)})' : ''}'
+                        '${over ? '\nهشدار: دریافتی از جمع سفارش بیشتر است.' : ''}',
+                        style: TextStyle(fontWeight: FontWeight.w600, color: over ? Theme.of(c).colorScheme.error : null),
+                      ),
+                    );
+                  },
+                ),
                 gap(),
                 DropdownButtonFormField<String?>(
                   key: ValueKey('acc${accounts.length}'),
