@@ -362,7 +362,7 @@ class _SettingsPageState extends State<SettingsPage> {
               CsvSection(repo: repo),
             ],
             gap(16),
-            const Section(title: 'دربارهٔ برنامه', child: Text('MORS ACC • نسخهٔ ۱٫۱۹٫۱\nفونت وزیرمتن (مجوز OFL)')),
+            const Section(title: 'دربارهٔ برنامه', child: Text('MORS ACC • نسخهٔ ۱٫۱۹٫۲\nفونت وزیرمتن (مجوز OFL)')),
           ]),
         );
         },

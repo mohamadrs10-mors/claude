@@ -1,5 +1,6 @@
 import '../data/repo.dart';
 import '../util/format.dart';
+import '../util/words.dart';
 import 'report_doc.dart';
 
 /// The line printed under a draft order unless the user changed it (Settings, or
@@ -40,6 +41,11 @@ ReportDoc orderDoc(Order o, Party? party, List<Cheque> cheques, Map<String, Stri
             [faDigits('${i + 1}'), o.items[i].title, '${_q(o.items[i].qty)} ${units[o.items[i].productId] ?? ''}'.trim(), money(o.items[i].unitPrice), money(o.items[i].total)],
         ],
         totals: ['', 'جمع', '', '', money(o.total)],
+        // The amounts written out in full, as on a cheque.
+        caption: [
+          'جمع به حروف: ${persianWords(o.total)} $currencyLabel',
+          if (advance > 0) '${draft ? 'پیش‌دریافت پیشنهادی' : 'پیش‌دریافت'} به حروف: ${persianWords(advance)} $currencyLabel',
+        ].join('\n'),
       ),
       if (!draft && cheques.isNotEmpty)
         ReportTable(
@@ -53,9 +59,9 @@ ReportDoc orderDoc(Order o, Party? party, List<Cheque> cheques, Map<String, Stri
           ],
         ),
     ],
-    footnote: [
-      if (draft && draftFooter.trim().isNotEmpty) draftFooter.trim(),
-      if (o.note.isNotEmpty) 'توضیحات: ${o.note}',
-    ].join('\n'),
+    footnote: o.note.isEmpty ? '' : 'توضیحات: ${o.note}',
+    signatures: const ['محل امضا و مهر خریدار', 'محل امضا و مهر فروشنده'],
+    // The validity line of a draft, centred under everything.
+    closing: draft ? draftFooter : '',
   );
 }

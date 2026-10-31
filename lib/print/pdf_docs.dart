@@ -182,9 +182,30 @@ class PdfDocs {
         for (final t in d.tables) ...[
           if (t.heading != null) ...[_text(t.heading!, size: 11, bold: true), pw.SizedBox(height: 4)],
           _tableOf(t),
+          if (t.caption.isNotEmpty) ...[pw.SizedBox(height: 4), _text(t.caption, size: 10, bold: true)],
           pw.SizedBox(height: 14),
         ],
         if (d.footnote.isNotEmpty) _text(d.footnote, size: 8, color: PdfColors.grey700),
+        if (d.signatures.isNotEmpty) ...[
+          pw.SizedBox(height: 22),
+          pw.Row(children: [
+            for (var i = 0; i < d.signatures.length; i++) ...[
+              if (i > 0) pw.SizedBox(width: 18),
+              pw.Expanded(
+                child: pw.Container(
+                  height: 70,
+                  padding: const pw.EdgeInsets.all(6),
+                  decoration: pw.BoxDecoration(border: pw.Border.all(color: _line, width: 0.8), borderRadius: pw.BorderRadius.circular(6)),
+                  child: pw.Align(alignment: pw.Alignment.topRight, child: _text(d.signatures[i], size: 9, bold: true)),
+                ),
+              ),
+            ],
+          ]),
+        ],
+        if (d.closing.trim().isNotEmpty) ...[
+          pw.SizedBox(height: 18),
+          pw.Center(child: _text(d.closing.trim(), size: 10, color: PdfColors.grey800, align: pw.TextAlign.center)),
+        ],
       ],
     ));
     return doc.save();

@@ -8,6 +8,7 @@ class ReportTable {
     required this.headers,
     required this.rows,
     this.totals,
+    this.caption = '',
     List<Col>? cols,
     List<double>? flex,
   })  : cols = cols ?? List.filled(headers.length, Col.text),
@@ -19,6 +20,9 @@ class ReportTable {
 
   /// Optional bold last row.
   final List<String>? totals;
+
+  /// A line (or two) written under the table, e.g. the total in words.
+  final String caption;
   final List<Col> cols;
   final List<double> flex;
 }
@@ -32,9 +36,17 @@ class ReportDoc {
     this.summary = const [],
     this.tables = const [],
     this.footnote = '',
+    this.signatures = const [],
+    this.closing = '',
   });
 
   final String title, subtitle, footnote;
+
+  /// Labels of signature boxes at the end (e.g. buyer and seller).
+  final List<String> signatures;
+
+  /// A closing line printed centred at the very end.
+  final String closing;
 
   /// Label/value boxes shown above the tables.
   final List<(String, String)> summary;

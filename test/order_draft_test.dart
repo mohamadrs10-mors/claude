@@ -5,6 +5,7 @@ import 'package:simple_accounting/data/db.dart';
 import 'package:simple_accounting/data/repo.dart';
 import 'package:simple_accounting/print/order_docs.dart';
 import 'package:simple_accounting/util/format.dart';
+import 'package:simple_accounting/util/words.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 var _n = 0;
@@ -18,6 +19,21 @@ Future<Repo> newRepo() async {
 }
 
 void main() {
+  test('amounts in Persian words', () {
+    expect(persianWords(0), 'صفر');
+    expect(persianWords(7), 'هفت');
+    expect(persianWords(15), 'پانزده');
+    expect(persianWords(21), 'بیست و یک');
+    expect(persianWords(100), 'صد');
+    expect(persianWords(345), 'سیصد و چهل و پنج');
+    expect(persianWords(1000), 'یک هزار');
+    expect(persianWords(1250000), 'یک میلیون و دویست و پنجاه هزار');
+    expect(persianWords(33000000), 'سی و سه میلیون');
+    expect(persianWords(2000000005), 'دو میلیارد و پنج');
+    expect(persianWords(-1200), 'منفی یک هزار و دویست');
+    expect(persianWords(1002003004), 'یک میلیارد و دو میلیون و سه هزار و چهار');
+  });
+
   test('a draft books nothing; it becomes a real order with the advance when converted; the delivery date is kept', () async {
     final r = await newRepo();
     await r.saveAccount(name: 'صندوق', kind: 'cash', opening: 1000000);
@@ -92,11 +108,15 @@ void main() {
     expect(boxes.keys.any((k) => k.contains('پیش‌دریافت پیشنهادی')), isTrue);
     expect(boxes['مانده بعد از پیش‌دریافت'], moneyC(150000));
     expect(boxes['تاریخ تحویل'], jalaliText('2025-03-30'));
-    expect(doc.footnote, contains('قیمت‌های فوق با توجه به نوسانات قیمت متریال و مواد مصرفی تنها ۴۸ ساعت اعتبار دارد'));
-    expect(doc.footnote, contains('تحویل در انبار'));
-    // The line is editable: another text replaces it, an empty one removes it.
-    expect(orderDoc(o, ali, const [], {prod.id: 'کیسه'}, draftFooter: 'اعتبار این برگه ۷۲ ساعت است').footnote, allOf(contains('۷۲ ساعت'), isNot(contains('۴۸ ساعت'))));
-    expect(orderDoc(o, ali, const [], {prod.id: 'کیسه'}, draftFooter: '  ').footnote, 'توضیحات: تحویل در انبار');
+    // The validity line is the closing line (centred at the end); notes stay in the footnote.
+    expect(doc.closing, 'قیمت‌های فوق با توجه به نوسانات قیمت متریال و مواد مصرفی تنها ۴۸ ساعت اعتبار دارد');
+    expect(doc.footnote, 'توضیحات: تحویل در انبار');
+    expect(orderDoc(o, ali, const [], {prod.id: 'کیسه'}, draftFooter: 'اعتبار این برگه ۷۲ ساعت است').closing, 'اعتبار این برگه ۷۲ ساعت است');
+    expect(orderDoc(o, ali, const [], {prod.id: 'کیسه'}, draftFooter: '  ').closing.trim(), '');
+    // Buyer and seller signature boxes, and the amounts in words under the table.
+    expect(doc.signatures, ['محل امضا و مهر خریدار', 'محل امضا و مهر فروشنده']);
+    expect(doc.tables.first.caption, contains('جمع به حروف: دویست و پنجاه هزار $currencyLabel'));
+    expect(doc.tables.first.caption, contains('پیش‌دریافت پیشنهادی به حروف: صد هزار $currencyLabel'));
     final t = doc.tables.single;
     expect(t.rows.single, ['۱', 'برنج', '۱۲.۵۰ کیسه', money(20000), money(250000)]);
     expect(t.rows.every((row) => row.length == t.headers.length), isTrue);
@@ -107,7 +127,9 @@ void main() {
     o = (await r.orders()).single;
     doc = orderDoc(o, ali, await r.cheques(), {prod.id: 'کیسه'});
     expect(doc.title, 'سفارش مشتری');
-    expect(doc.footnote, isNot(contains('۴۸ ساعت'))); // the closing line is for drafts only
+    expect(doc.closing, ''); // the validity line is for drafts only
+    expect(doc.signatures.length, 2);
+    expect(doc.tables.first.caption, contains('پیش‌دریافت به حروف: صد هزار'));
     expect(doc.tables.length, 2);
     expect(doc.tables[1].rows.single.last, money(40000));
     for (final tb in doc.tables) {
