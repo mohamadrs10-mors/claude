@@ -129,6 +129,57 @@ class PdfDocs {
   static Map<int, pw.TableColumnWidth> _widths(List<pw.TableColumnWidth> w) =>
       {for (var i = 0; i < w.length; i++) i: w[w.length - 1 - i]};
 
+
+  /// Column widths from the content, so columns never run into each other:
+  /// a column is never narrower than its longest word (numbers: the whole
+  /// value). Spare room is shared by [flex]; when even the minimum does not
+  /// fit the page, everything (text too) is shrunk together - the returned
+  /// scale. [cols] are the table columns in reading order, [size] the font size.
+  ({List<double> widths, double scale}) _fit(List<List<String>> columns, List<Col> kinds, List<double> flex, double avail, double size) {
+    final fs = _s(size);
+    double est(String t) => t.length * fs * 0.5;
+    final natural = <double>[], minimum = <double>[];
+    for (var i = 0; i < columns.length; i++) {
+      var nat = 0.0, word = 0.0;
+      for (final cell in columns[i]) {
+        for (final line in cell.split('\n')) {
+          nat = nat > est(line) ? nat : est(line);
+          for (final w in line.split(RegExp(r'[ \u200c]+'))) {
+            word = word > est(w) ? word : est(w);
+          }
+        }
+      }
+      const pad = 14.0;
+      natural.add(nat + pad);
+      minimum.add((kinds[i] == Col.text ? word : nat) + pad);
+    }
+    final sumMin = minimum.fold(0.0, (a, b) => a + b);
+    final sumNat = natural.fold(0.0, (a, b) => a + b);
+    if (sumMin >= avail) {
+      final k = avail / sumMin;
+      return (widths: [for (final m in minimum) m * k], scale: k);
+    }
+    final w = <double>[];
+    if (sumNat <= avail) {
+      final totalFlex = flex.fold(0.0, (a, b) => a + b);
+      for (var i = 0; i < natural.length; i++) {
+        w.add(natural[i] + (avail - sumNat) * flex[i] / totalFlex);
+      }
+    } else {
+      final room = avail - sumMin;
+      final want = [for (var i = 0; i < natural.length; i++) natural[i] - minimum[i]];
+      final sumWant = want.fold(0.0, (a, b) => a + b);
+      for (var i = 0; i < natural.length; i++) {
+        w.add(minimum[i] + (sumWant == 0 ? 0 : room * want[i] / sumWant));
+      }
+    }
+    return (widths: w, scale: 1.0);
+  }
+
+  double _availWidth(PdfPageFormat f, pw.EdgeInsets m) => f.width - m.left - m.right - 2;
+
+  static List<pw.TableColumnWidth> _fixed(List<double> w) => [for (final x in w) pw.FixedColumnWidth(x)];
+
   pw.Widget _cell(String t, {bool bold = false, Col col = Col.text, PdfColor? color, double size = 10}) => pw.Padding(
         padding: const pw.EdgeInsets.symmetric(horizontal: 6, vertical: 4),
         child: _text(t,
@@ -142,17 +193,25 @@ class PdfDocs {
             }),
       );
 
-  pw.Widget _tableOf(ReportTable t) => pw.Table(
-        border: pw.TableBorder.all(color: _line, width: 0.6),
-        columnWidths: _widths([for (final f in t.flex) pw.FlexColumnWidth(f)]),
-        children: [
-          _row([for (var i = 0; i < t.headers.length; i++) _cell(t.headers[i], bold: true, col: t.cols[i])],
-              background: _soft, repeat: true),
-          for (final r in t.rows) _row([for (var i = 0; i < r.length; i++) _cell(r[i], col: t.cols[i])]),
-          if (t.totals != null)
-            _row([for (var i = 0; i < t.totals!.length; i++) _cell(t.totals![i], bold: true, col: t.cols[i])], background: _soft),
-        ],
-      );
+  pw.Widget _tableOf(ReportTable t, double avail) {
+    final columns = [
+      for (var i = 0; i < t.headers.length; i++)
+        [t.headers[i], for (final r in t.rows) if (i < r.length) r[i], if (t.totals != null && i < t.totals!.length) t.totals![i]],
+    ];
+    final fit = _fit(columns, t.cols, t.flex, avail, 10);
+    final sz = 10 * fit.scale;
+    return pw.Table(
+      border: pw.TableBorder.all(color: _line, width: 0.6),
+      columnWidths: _widths(_fixed(fit.widths)),
+      children: [
+        _row([for (var i = 0; i < t.headers.length; i++) _cell(t.headers[i], bold: true, col: t.cols[i], size: sz)],
+            background: _soft, repeat: true),
+        for (final r in t.rows) _row([for (var i = 0; i < r.length; i++) _cell(r[i], col: t.cols[i], size: sz)]),
+        if (t.totals != null)
+          _row([for (var i = 0; i < t.totals!.length; i++) _cell(t.totals![i], bold: true, col: t.cols[i], size: sz)], background: _soft),
+      ],
+    );
+  }
 
   pw.Widget Function(pw.Context)? _pageNoFor(String kind) => _show(kind, 'pageno') ? _pageNo : null;
 
@@ -207,7 +266,7 @@ class PdfDocs {
         ],
         for (final t in d.tables) ...[
           if (t.heading != null) ...[_text(t.heading!, size: 11, bold: true), pw.SizedBox(height: 4)],
-          _tableOf(t),
+          _tableOf(t, _availWidth(format ?? s.format, _marginFor(kind))),
           if (t.caption.isNotEmpty) ...[pw.SizedBox(height: 4), _text(t.caption, size: 10, bold: true)],
           pw.SizedBox(height: 14),
         ],
@@ -416,12 +475,31 @@ class PdfDocs {
     final modern = tpl == 'modern';
     final headBg = modern ? accent : _soft;
     final headFg = modern ? PdfColors.white : null;
+    final fit = _fit([
+      if (rowNo) ['ردیف', for (var i = 0; i < items.length; i++) faDigits('${i + 1}')],
+      ['شرح کالا / خدمات', for (final it in items) it.title],
+      ['تعداد', for (final it in items) _qty(it.qty)],
+      ['قیمت واحد', for (final it in items) money(it.unitPrice)],
+      ['مبلغ', for (final it in items) money(it.total)],
+    ], [
+      if (rowNo) Col.center,
+      Col.text,
+      Col.center,
+      Col.number,
+      Col.number,
+    ], [
+      if (rowNo) 0.2,
+      4,
+      0.3,
+      1.6,
+      1.8,
+    ], _availWidth(fmt, _marginFor('invoice')), 10 * fs);
     pw.Widget c(String t, {bool bold = false, Col col = Col.text, PdfColor? color}) => pw.Padding(
           padding: pw.EdgeInsets.symmetric(horizontal: 6, vertical: pad),
           child: _text(t,
               bold: bold,
               color: color,
-              size: 10 * fs,
+              size: 10 * fs * fit.scale,
               align: switch (col) {
                 Col.text => pw.TextAlign.right,
                 Col.number => pw.TextAlign.left,
@@ -432,13 +510,7 @@ class PdfDocs {
       border: modern
           ? pw.TableBorder(horizontalInside: pw.BorderSide(color: _line, width: 0.5), bottom: pw.BorderSide(color: accent, width: 1))
           : pw.TableBorder.all(color: tpl == 'simple' ? PdfColors.grey700 : _line, width: 0.6),
-      columnWidths: _widths([
-        if (rowNo) const pw.FixedColumnWidth(36),
-        const pw.FlexColumnWidth(4),
-        const pw.FixedColumnWidth(52),
-        const pw.FlexColumnWidth(1.6),
-        const pw.FlexColumnWidth(1.8),
-      ]),
+      columnWidths: _widths(_fixed(fit.widths)),
       children: [
         _row([
           if (rowNo) c('ردیف', bold: true, col: Col.center, color: headFg),
@@ -589,6 +661,22 @@ class PdfDocs {
           ),
         );
 
+    final dFit = _fit([
+      if (rowNo) ['ردیف', for (var i = 0; i < d.lines.length; i++) faDigits('${i + 1}')],
+      ['شرح کالا', for (final l in d.lines) l.$1],
+      ['تعداد', for (final l in d.lines) _qty(l.$2)],
+      ['واحد', for (final l in d.lines) l.$3],
+    ], [
+      if (rowNo) Col.center,
+      Col.text,
+      Col.center,
+      Col.center,
+    ], [
+      if (rowNo) 0.3,
+      5,
+      0.6,
+      0.6,
+    ], _availWidth(format ?? s.format, _marginFor('delivery')), 10);
     doc.addPage(pw.MultiPage(
       pageFormat: format ?? s.format,
       margin: _marginFor('delivery'),
@@ -630,25 +718,20 @@ class PdfDocs {
         pw.SizedBox(height: 10),
         pw.Table(
           border: pw.TableBorder.all(color: _line, width: 0.6),
-          columnWidths: _widths([
-            if (rowNo) const pw.FixedColumnWidth(36),
-            const pw.FlexColumnWidth(5),
-            const pw.FixedColumnWidth(60),
-            const pw.FixedColumnWidth(60),
-          ]),
+          columnWidths: _widths(_fixed(dFit.widths)),
           children: [
             _row([
-              if (rowNo) _cell('ردیف', bold: true, col: Col.center),
-              _cell('شرح کالا', bold: true),
-              _cell('تعداد', bold: true, col: Col.center),
-              _cell('واحد', bold: true, col: Col.center),
+              if (rowNo) _cell('ردیف', bold: true, col: Col.center, size: dFit.scale * 10),
+              _cell('شرح کالا', bold: true, size: dFit.scale * 10),
+              _cell('تعداد', bold: true, col: Col.center, size: dFit.scale * 10),
+              _cell('واحد', bold: true, col: Col.center, size: dFit.scale * 10),
             ], background: _soft, repeat: true),
             for (var i = 0; i < d.lines.length; i++)
               _row([
-                if (rowNo) _cell(faDigits('${i + 1}'), col: Col.center),
-                _cell(d.lines[i].$1),
-                _cell(_qty(d.lines[i].$2), col: Col.center),
-                _cell(d.lines[i].$3, col: Col.center),
+                if (rowNo) _cell(faDigits('${i + 1}'), col: Col.center, size: dFit.scale * 10),
+                _cell(d.lines[i].$1, size: dFit.scale * 10),
+                _cell(_qty(d.lines[i].$2), col: Col.center, size: dFit.scale * 10),
+                _cell(d.lines[i].$3, col: Col.center, size: dFit.scale * 10),
               ]),
           ],
         ),
