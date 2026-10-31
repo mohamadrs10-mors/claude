@@ -1728,15 +1728,15 @@ class Repo extends ChangeNotifier {
       invNumbers[i.id] = i.number;
       if (!i.info.ledger) continue;
       final lines = await invoiceItems(i.id);
-      final names = lines.take(3).map((l) => '${l.title} × ${faDigits(numText(l.qty))}').join('، ');
-      final more = lines.length > 3 ? ' و ${faDigits('${lines.length - 3}')} قلم دیگر' : '';
+      // Every item is written, one per line, however long the invoice is.
+      final names = lines.map((l) => '${l.title} × ${faDigits(numText(l.qty))}').join('\n');
       final signed = i.info.partyOwesUs ? i.total : -i.total;
       items.add((
         i.date,
         0,
         PartyLedgerRow(
           date: i.date, type: i.info.label, number: faDigits('${i.number}'), invoiceId: i.id,
-          description: [names + more, if (i.note.isNotEmpty) i.note].where((t) => t.isNotEmpty).join(' • '),
+          description: [names, if (i.note.isNotEmpty) i.note].where((t) => t.isNotEmpty).join('\n'),
           debit: signed > 0 ? signed : 0, credit: signed < 0 ? -signed : 0, balance: 0,
         ),
         signed,

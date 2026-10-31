@@ -54,7 +54,11 @@ void main() {
     ]);
     expect(l.rows.map((x) => x.number).toList(), ['۱', '', '۲', '۳', '۳', '']);
     expect(l.rows.first.description, contains('برنج × ۱۰'));
-    expect(l.rows.first.description, contains('قلم دیگر')); // 4 lines: 3 shown + 1 more
+    // every item of the invoice is written, none is cut to "and N more"
+    for (final n in ['روغن × ۲', 'نخ × ۱', 'سوزن × ۱']) {
+      expect(l.rows.first.description, contains(n));
+    }
+    expect(l.rows.first.description, isNot(contains('قلم دیگر')));
     expect(l.rows.first.description, contains('اولین فروش'));
     expect(l.rows[1].description, contains('صندوق'));
     expect(l.rows[1].description, contains('علی‌الحساب'));
