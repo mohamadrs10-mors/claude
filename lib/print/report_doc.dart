@@ -38,9 +38,13 @@ class ReportDoc {
     this.footnote = '',
     this.signatures = const [],
     this.closing = '',
+    this.kind = 'report',
   });
 
   final String title, subtitle, footnote;
+
+  /// Which printout this is (`report`, `statement`, `order`, `draft`), for its layout settings.
+  final String kind;
 
   /// Labels of signature boxes at the end (e.g. buyer and seller).
   final List<String> signatures;

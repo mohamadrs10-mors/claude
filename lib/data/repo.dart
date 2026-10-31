@@ -5,6 +5,7 @@ import 'package:shamsi_date/shamsi_date.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart' show DatabaseExecutor;
 
 import '../util/format.dart';
+import '../print/print_layout.dart';
 import '../print/print_settings.dart';
 import 'costing.dart';
 import 'db.dart';
@@ -534,6 +535,14 @@ class Repo extends ChangeNotifier {
 
   /// Page set-up for printing (per device, not synced).
   PrintSettings get printSettings => PrintSettings.fromPrefs(prefs);
+
+  /// Which parts of each printout are shown and its margins (per device).
+  PrintLayout get printLayout => PrintLayout.fromPrefs(prefs);
+
+  Future<void> setPrintLayout(PrintLayout l) async {
+    await l.save(prefs);
+    notifyListeners();
+  }
 
   /// Loads synced settings (business info, VAT, currency). Call once at start.
   Future<void> init() async {

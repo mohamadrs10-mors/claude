@@ -336,6 +336,7 @@ ReportDoc ledgerDoc({required String title, required String subtitle, required L
 ReportDoc partyLedgerDoc(Party party, PartyLedger l, String period) {
   String bal(int v) => v == 0 ? '۰' : (v > 0 ? '${money(v)} بدهکار' : '${money(-v)} بستانکار');
   return ReportDoc(
+    kind: 'statement',
     title: 'معین ${party.name}',
     subtitle: 'بازه: $period${party.phone.isEmpty ? '' : ' • تلفن: ${faDigits(party.phone)}'}',
     summary: [

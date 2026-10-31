@@ -12,6 +12,7 @@ import '../data/access.dart';
 import 'auth.dart';
 import 'common.dart';
 import 'print_dialog.dart';
+import 'print_layout_page.dart';
 import 'settings_extras.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -340,6 +341,12 @@ class _SettingsPageState extends State<SettingsPage> {
                       ),
                     ),
                   ]),
+                  gap(8),
+                  OutlinedButton.icon(
+                    onPressed: () => Navigator.push(context, MaterialPageRoute<void>(builder: (_) => PrintLayoutPage(repo: repo))),
+                    icon: const Icon(Icons.dashboard_customize_outlined),
+                    label: const Text('چیدمان هر برگه: نمایش بخش‌ها و حاشیه‌ها'),
+                  ),
                   const SizedBox(height: 6),
                   Text(
                     'اندازهٔ کاغذ و جهت را هنگام چاپ هم می‌توانید عوض کنید. چاپگر و تعداد نسخه را از پنجرهٔ چاپ سیستم انتخاب کنید. '
@@ -362,7 +369,7 @@ class _SettingsPageState extends State<SettingsPage> {
               CsvSection(repo: repo),
             ],
             gap(16),
-            const Section(title: 'دربارهٔ برنامه', child: Text('MORS ACC • نسخهٔ ۱٫۱۹٫۲\nفونت وزیرمتن (مجوز OFL)')),
+            const Section(title: 'دربارهٔ برنامه', child: Text('MORS ACC • نسخهٔ ۱٫۲۰\nفونت وزیرمتن (مجوز OFL)')),
           ]),
         );
         },

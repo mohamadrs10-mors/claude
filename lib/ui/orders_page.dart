@@ -139,7 +139,7 @@ class OrderViewPage extends StatelessWidget {
           // A draft's closing line (e.g. how long the prices are valid) can be edited
           // right in the preview, for this print only or as the new default.
           Future<void> printIt() {
-            if (!draft) return printReport(c, repo, orderDoc(o, party, cheques, units));
+            if (!draft) return printReport(c, repo, orderDoc(o, party, cheques, units, layout: repo.printLayout));
             final saved = repo.setting('draft_footer', defaultDraftFooter);
             var footer = saved;
             final ctl = TextEditingController(text: saved);
@@ -148,7 +148,7 @@ class OrderViewPage extends StatelessWidget {
               repo,
               title: 'پیش‌نویس سفارش ${faDigits('${o.number}')}',
               filename: 'order-draft-${o.number}.pdf',
-              build: (s, f) => PdfDocs(repo, settings: s).report(orderDoc(o, party, cheques, units, draftFooter: footer), format: f),
+              build: (s, f) => PdfDocs(repo, settings: s).report(orderDoc(o, party, cheques, units, draftFooter: footer, layout: repo.printLayout), format: f),
               options: (ctx, refresh) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 TextField(
                   controller: ctl,

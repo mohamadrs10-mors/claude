@@ -10,6 +10,7 @@ import '../data/repo.dart';
 import '../util/format.dart';
 import 'delivery_doc.dart';
 import 'print_settings.dart';
+import 'print_layout.dart';
 import 'report_doc.dart';
 
 /// Builds printable PDFs: invoice (any paper size, or a thermal roll),
@@ -17,9 +18,30 @@ import 'report_doc.dart';
 /// are done by the pdf package using the embedded Vazirmatn font. Paper size,
 /// margins and text size come from [PrintSettings].
 class PdfDocs {
-  PdfDocs(this.repo, {PrintSettings? settings}) : s = settings ?? repo.printSettings;
+  PdfDocs(this.repo, {PrintSettings? settings, PrintLayout? layout})
+      : s = settings ?? repo.printSettings,
+        layout = layout ?? repo.printLayout;
   final Repo repo;
   final PrintSettings s;
+
+  /// Which parts of each printout are shown, and its margins (Settings > print).
+  final PrintLayout layout;
+
+  /// Whether a part of a printout is shown. [legacy] names an older synced
+  /// setting that decides while the user has not chosen anything here.
+  bool _show(String kind, String key, {String? legacy}) {
+    final v = layout.explicit(kind, key);
+    if (v != null) return v;
+    if (legacy != null) return repo.setting(legacy, '1') != '0';
+    return layout.shows(kind, key);
+  }
+
+  /// The page margin of one kind of printout (its own, or the one from Settings).
+  pw.EdgeInsets _marginFor(String kind) {
+    final m = layout.margins(kind);
+    double mm(int i) => (m?[i] ?? s.marginMm) * PdfPageFormat.mm;
+    return pw.EdgeInsets.fromLTRB(mm(3), mm(0), mm(1), mm(2));
+  }
 
   static pw.Font? _regular, _bold;
 
@@ -132,7 +154,9 @@ class PdfDocs {
         ],
       );
 
-  pw.Widget _footer(pw.Context c) => pw.Align(
+  pw.Widget Function(pw.Context)? _pageNoFor(String kind) => _show(kind, 'pageno') ? _pageNo : null;
+
+  pw.Widget _pageNo(pw.Context c) => pw.Align(
         alignment: pw.Alignment.center,
         child: pw.Text('صفحه ${faDigits('${c.pageNumber}')} از ${faDigits('${c.pagesCount}')}',
             style: pw.TextStyle(fontSize: _s(8), color: PdfColors.grey600)),
@@ -146,26 +170,28 @@ class PdfDocs {
   Future<Uint8List> report(ReportDoc d, {PdfPageFormat? format}) async {
     final doc = pw.Document(title: d.title, author: _business);
     final theme = await _theme();
+    final kind = d.kind;
+    final logo = _show(kind, 'logo') ? _logo : null;
     doc.addPage(pw.MultiPage(
       pageFormat: format ?? s.format,
-      margin: _margin,
+      margin: _marginFor(kind),
       textDirection: pw.TextDirection.rtl,
       theme: theme,
-      footer: _footer,
+      footer: _pageNoFor(kind),
       build: (c) => [
         pw.Row(crossAxisAlignment: pw.CrossAxisAlignment.center, children: [
-          if (_logo != null) ...[_logoBox(_logo!, 42, border: true), pw.SizedBox(width: 10)],
+          if (logo != null) ...[_logoBox(logo, 42, border: true), pw.SizedBox(width: 10)],
           pw.Expanded(
             child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
               _text(_business, size: 15, bold: true),
               _text(d.title, size: 13, bold: true, color: _accent),
-              if (d.subtitle.isNotEmpty) _text('${d.subtitle} • تاریخ گزارش: ${jalaliText(todayIso())}', size: 9)
-              else _text('تاریخ گزارش: ${jalaliText(todayIso())}', size: 9),
+              if (d.subtitle.isNotEmpty) _text(_show(kind, 'date') ? '${d.subtitle} • تاریخ گزارش: ${jalaliText(todayIso())}' : d.subtitle, size: 9)
+              else if (_show(kind, 'date')) _text('تاریخ گزارش: ${jalaliText(todayIso())}', size: 9),
             ]),
           ),
         ]),
         pw.SizedBox(height: 10),
-        if (d.summary.isNotEmpty) ...[
+        if (d.summary.isNotEmpty && _show(kind, 'summary')) ...[
           pw.Wrap(spacing: 8, runSpacing: 8, children: [
             for (final (label, value) in d.summary)
               pw.Container(
@@ -185,8 +211,8 @@ class PdfDocs {
           if (t.caption.isNotEmpty) ...[pw.SizedBox(height: 4), _text(t.caption, size: 10, bold: true)],
           pw.SizedBox(height: 14),
         ],
-        if (d.footnote.isNotEmpty) _text(d.footnote, size: 8, color: PdfColors.grey700),
-        if (d.signatures.isNotEmpty) ...[
+        if (d.footnote.isNotEmpty && _show(kind, 'footnote') && _show(kind, 'note')) _text(d.footnote, size: 8, color: PdfColors.grey700),
+        if (d.signatures.isNotEmpty && _show(kind, 'signatures')) ...[
           pw.SizedBox(height: 22),
           pw.Row(children: [
             for (var i = 0; i < d.signatures.length; i++) ...[
@@ -202,7 +228,7 @@ class PdfDocs {
             ],
           ]),
         ],
-        if (d.closing.trim().isNotEmpty) ...[
+        if (d.closing.trim().isNotEmpty && _show(kind, 'closing')) ...[
           pw.SizedBox(height: 18),
           pw.Center(child: _text(d.closing.trim(), size: 10, color: PdfColors.grey800, align: pw.TextAlign.center)),
         ],
@@ -220,6 +246,7 @@ class PdfDocs {
     String bal(int v) => v == 0 ? '۰' : (v > 0 ? '${money(v)} بدهکار' : '${money(-v)} بستانکار');
     return report(
       ReportDoc(
+        kind: 'statement',
         title: 'صورت‌حساب ${party.name}',
         subtitle: 'بازه: $periodLabel${party.phone.isEmpty ? '' : ' • تلفن: ${faDigits(party.phone)}'}',
         summary: [
@@ -254,10 +281,11 @@ class PdfDocs {
     final doc = pw.Document(title: '${inv.info.label} ${inv.number}', author: _business);
     final theme = await _theme();
     final info = inv.info;
-    final phone = repo.setting('business_phone');
-    final address = repo.setting('business_address');
-    final footer = repo.setting('invoice_footer');
-    final taxId = repo.setting('business_tax_id');
+    final rollKind = roll ? 'roll' : 'invoice';
+    final phone = _show(rollKind, 'phone') ? repo.setting('business_phone') : '';
+    final address = _show('invoice', 'address') ? repo.setting('business_address') : '';
+    final footer = _show(rollKind, 'footer') ? repo.setting('invoice_footer') : '';
+    final taxId = _show('invoice', 'taxid') ? repo.setting('business_tax_id') : '';
     final cur = currencyLabel;
 
     final totals = <(String, String, bool)>[
@@ -273,17 +301,18 @@ class PdfDocs {
     if (roll) {
       doc.addPage(pw.Page(
         pageFormat: PdfPageFormat(s.rollWidthMm * PdfPageFormat.mm, double.infinity, marginAll: 4 * PdfPageFormat.mm),
+        margin: layout.margins('roll') == null ? null : _marginFor('roll'),
         textDirection: pw.TextDirection.rtl,
         theme: theme,
         build: (c) => pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.stretch, children: [
-          if (_logo != null) pw.Center(child: pw.SizedBox(height: 40, child: pw.Image(_logo!, fit: pw.BoxFit.contain))),
+          if (_show('roll', 'logo') && _logo != null) pw.Center(child: pw.SizedBox(height: 40, child: pw.Image(_logo!, fit: pw.BoxFit.contain))),
           pw.Center(child: _text(_business, size: 14, bold: true)),
           if (phone.isNotEmpty) pw.Center(child: _text(faDigits(phone), size: 9)),
           pw.SizedBox(height: 4),
           pw.Divider(thickness: 0.6),
           _text('${info.label} ${faDigits('${inv.number}')}', size: 11, bold: true),
           _text('تاریخ: ${jalaliText(inv.date)}', size: 9),
-          if (party != null) _text('${info.partyLabel}: ${party.name}', size: 9),
+          if (party != null && _show('roll', 'party')) _text('${info.partyLabel}: ${party.name}', size: 9),
           pw.Divider(thickness: 0.6),
           for (final it in items)
             pw.Padding(
@@ -317,12 +346,12 @@ class PdfDocs {
     final tpl = template ?? repo.setting('invoice_template', 'classic');
     final compact = tpl == 'compact';
     final accent = _accentOf(repo.setting('invoice_accent', 'green'));
-    final showLogo = repo.setting('invoice_logo', '1') != '0';
-    final rowNo = repo.setting('invoice_rownum', '1') != '0';
-    final sign = repo.setting('invoice_signatures', '1') != '0';
-    final qr = repo.setting('invoice_qr', '0') == '1';
+    final showLogo = _show('invoice', 'logo', legacy: 'invoice_logo');
+    final rowNo = _show('invoice', 'rownum', legacy: 'invoice_rownum');
+    final sign = _show('invoice', 'signatures', legacy: 'invoice_signatures');
+    final qr = layout.explicit('invoice', 'qr') ?? (repo.setting('invoice_qr', '0') == '1');
     final whs = await repo.warehouses();
-    final wh = whs.length > 1 ? whs.where((w) => w.id == (inv.warehouseId ?? mainWarehouseId)).firstOrNull?.name : null;
+    final wh = !_show('invoice', 'warehouse') ? null : whs.length > 1 ? whs.where((w) => w.id == (inv.warehouseId ?? mainWarehouseId)).firstOrNull?.name : null;
     final logo = showLogo ? _logo : null;
     final fs = compact ? 0.88 : 1.0; // text scale of the table
     final pad = compact ? 2.0 : 4.0;
@@ -342,7 +371,7 @@ class PdfDocs {
           ),
       ]),
     );
-    final noteBox = inv.note.isEmpty
+    final noteBox = inv.note.isEmpty || !_show('invoice', 'note')
         ? null
         : pw.Container(
             padding: const pw.EdgeInsets.all(8),
@@ -354,7 +383,7 @@ class PdfDocs {
       _text(info.label, size: compact ? 13 : 17, bold: true, color: tpl == 'classic' ? PdfColors.white : (tpl == 'modern' ? accent : null)),
       _text('شماره: ${faDigits('${inv.number}')}', color: tpl == 'classic' ? PdfColors.white : null),
       _text('تاریخ: ${jalaliText(inv.date)}', color: tpl == 'classic' ? PdfColors.white : null),
-      if (inv.dueDate != null && inv.kind != 'proforma') _text('سررسید: ${jalaliText(inv.dueDate!)}', size: 9, color: tpl == 'classic' ? PdfColors.white : null),
+      if (inv.dueDate != null && inv.kind != 'proforma' && _show('invoice', 'due')) _text('سررسید: ${jalaliText(inv.dueDate!)}', size: 9, color: tpl == 'classic' ? PdfColors.white : null),
       if (wh != null) _text('انبار: $wh', size: 9, color: tpl == 'classic' ? PdfColors.white : null),
     ];
     final onHead = tpl == 'classic' ? PdfColors.white : null;
@@ -431,10 +460,10 @@ class PdfDocs {
 
     doc.addPage(pw.MultiPage(
       pageFormat: fmt,
-      margin: _margin,
+      margin: _marginFor('invoice'),
       textDirection: pw.TextDirection.rtl,
       theme: theme,
-      footer: _footer,
+      footer: _pageNoFor('invoice'),
       build: (ctx) => [
         header,
         pw.SizedBox(height: compact ? 6 : 10),
@@ -444,7 +473,7 @@ class PdfDocs {
           decoration: pw.BoxDecoration(border: pw.Border.all(color: _line), borderRadius: pw.BorderRadius.circular(6)),
           child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
             _text('${info.partyLabel}: ${party?.name ?? '—'}', size: compact ? 10 : 11, bold: true),
-            if ((party?.phone ?? '').isNotEmpty) _text('تلفن: ${faDigits(party!.phone)}', size: 9),
+            if ((party?.phone ?? '').isNotEmpty && _show('invoice', 'party_phone')) _text('تلفن: ${faDigits(party!.phone)}', size: 9),
           ]),
         ),
         pw.SizedBox(height: compact ? 6 : 10),
@@ -524,7 +553,7 @@ class PdfDocs {
       margin: _margin,
       textDirection: pw.TextDirection.rtl,
       theme: theme,
-      footer: _footer,
+      footer: _pageNo,
       build: (c) => [pw.Wrap(spacing: 8, runSpacing: 8, children: [for (final p in products) label(p)])],
     ));
     return doc.save();
@@ -538,9 +567,12 @@ class PdfDocs {
   Future<Uint8List> delivery(DeliveryDoc d, {bool signatures = true, PdfPageFormat? format}) async {
     final doc = pw.Document(title: 'رسید تحویل ${d.number}', author: _business);
     final theme = await _theme();
-    final phone = repo.setting('business_phone');
-    final address = repo.setting('business_address');
-    final footer = repo.setting('invoice_footer');
+    final phone = _show('delivery', 'address') ? repo.setting('business_phone') : '';
+    final address = _show('delivery', 'address') ? repo.setting('business_address') : '';
+    final footer = _show('delivery', 'footer') ? repo.setting('invoice_footer') : '';
+    final logo = _show('delivery', 'logo') ? _logo : null;
+    final rowNo = _show('delivery', 'rownum');
+    signatures = signatures && _show('delivery', 'signatures');
 
     pw.Widget signBox(String who) => pw.Expanded(
           child: pw.Container(
@@ -559,16 +591,16 @@ class PdfDocs {
 
     doc.addPage(pw.MultiPage(
       pageFormat: format ?? s.format,
-      margin: _margin,
+      margin: _marginFor('delivery'),
       textDirection: pw.TextDirection.rtl,
       theme: theme,
-      footer: _footer,
+      footer: _pageNoFor('delivery'),
       build: (c) => [
         pw.Container(
           padding: const pw.EdgeInsets.all(12),
           decoration: pw.BoxDecoration(color: _accent, borderRadius: pw.BorderRadius.circular(8)),
           child: pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-            if (_logo != null) ...[_logoBox(_logo!, 54), pw.SizedBox(width: 10)],
+            if (logo != null) ...[_logoBox(logo, 54), pw.SizedBox(width: 10)],
             pw.Expanded(
               child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
                 _text(_business, size: 17, bold: true, color: PdfColors.white),
@@ -590,30 +622,30 @@ class PdfDocs {
           decoration: pw.BoxDecoration(border: pw.Border.all(color: _line), borderRadius: pw.BorderRadius.circular(6)),
           child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
             _text('${d.partyLabel}: ${d.partyName.isEmpty ? '—' : d.partyName}', size: 11, bold: true),
-            if (d.phone.isNotEmpty) _text('تلفن: ${faDigits(d.phone)}', size: 9),
-            if (d.address.isNotEmpty) _text('نشانی: ${d.address}', size: 9),
+            if (d.phone.isNotEmpty && _show('delivery', 'party_phone')) _text('تلفن: ${faDigits(d.phone)}', size: 9),
+            if (d.address.isNotEmpty && _show('delivery', 'party_phone')) _text('نشانی: ${d.address}', size: 9),
             if (d.ref.isNotEmpty) _text(d.ref, size: 9),
           ]),
         ),
         pw.SizedBox(height: 10),
         pw.Table(
           border: pw.TableBorder.all(color: _line, width: 0.6),
-          columnWidths: _widths(const [
-            pw.FixedColumnWidth(36),
-            pw.FlexColumnWidth(5),
-            pw.FixedColumnWidth(60),
-            pw.FixedColumnWidth(60),
+          columnWidths: _widths([
+            if (rowNo) const pw.FixedColumnWidth(36),
+            const pw.FlexColumnWidth(5),
+            const pw.FixedColumnWidth(60),
+            const pw.FixedColumnWidth(60),
           ]),
           children: [
             _row([
-              _cell('ردیف', bold: true, col: Col.center),
+              if (rowNo) _cell('ردیف', bold: true, col: Col.center),
               _cell('شرح کالا', bold: true),
               _cell('تعداد', bold: true, col: Col.center),
               _cell('واحد', bold: true, col: Col.center),
             ], background: _soft, repeat: true),
             for (var i = 0; i < d.lines.length; i++)
               _row([
-                _cell(faDigits('${i + 1}'), col: Col.center),
+                if (rowNo) _cell(faDigits('${i + 1}'), col: Col.center),
                 _cell(d.lines[i].$1),
                 _cell(_qty(d.lines[i].$2), col: Col.center),
                 _cell(d.lines[i].$3, col: Col.center),
@@ -621,8 +653,8 @@ class PdfDocs {
           ],
         ),
         pw.SizedBox(height: 6),
-        _text('تعداد اقلام: ${faDigits('${d.lines.length}')} ردیف', size: 9, color: PdfColors.grey700),
-        if (d.note.isNotEmpty) ...[
+        if (_show('delivery', 'count')) _text('تعداد اقلام: ${faDigits('${d.lines.length}')} ردیف', size: 9, color: PdfColors.grey700),
+        if (d.note.isNotEmpty && _show('delivery', 'note')) ...[
           pw.SizedBox(height: 8),
           pw.Container(
             width: double.infinity,
