@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../data/repo.dart';
 import '../print/order_docs.dart';
+import '../print/pdf_docs.dart';
 import '../util/format.dart';
 import 'auth.dart';
 import 'common.dart';
@@ -135,7 +136,41 @@ class OrderViewPage extends StatelessWidget {
           if (o == null) return const Scaffold(body: Center(child: Text('این سفارش حذف شد.')));
           final canEdit = AccessScope.of(c).canEdit('orders');
           final draft = o.isDraft;
-          Future<void> printIt() => printReport(c, repo, orderDoc(o, party, cheques, units));
+          // A draft's closing line (e.g. how long the prices are valid) can be edited
+          // right in the preview, for this print only or as the new default.
+          Future<void> printIt() {
+            if (!draft) return printReport(c, repo, orderDoc(o, party, cheques, units));
+            final saved = repo.setting('draft_footer', defaultDraftFooter);
+            var footer = saved;
+            final ctl = TextEditingController(text: saved);
+            return showPrintDialog(
+              c,
+              repo,
+              title: 'پیش‌نویس سفارش ${faDigits('${o.number}')}',
+              filename: 'order-draft-${o.number}.pdf',
+              build: (s, f) => PdfDocs(repo, settings: s).report(orderDoc(o, party, cheques, units, draftFooter: footer), format: f),
+              options: (ctx, refresh) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                TextField(
+                  controller: ctl,
+                  minLines: 1,
+                  maxLines: 3,
+                  decoration: const InputDecoration(labelText: 'متن زیر پیش‌نویس', isDense: true),
+                  onChanged: (v) => footer = v,
+                ),
+                const SizedBox(height: 6),
+                Wrap(spacing: 8, runSpacing: 4, children: [
+                  FilledButton.tonal(onPressed: refresh, child: const Text('اعمال در پیش‌نمایش')),
+                  OutlinedButton(
+                    onPressed: () async {
+                      await repo.setSetting('draft_footer', footer.trim());
+                      if (ctx.mounted) toast(ctx, 'به‌عنوان متن پیش‌فرض پیش‌نویس‌ها ذخیره شد.');
+                    },
+                    child: const Text('ذخیره به‌عنوان پیش‌فرض'),
+                  ),
+                ]),
+              ]),
+            );
+          }
           Widget row(String l, String v, {bool bold = false}) => Padding(
                 padding: const EdgeInsets.symmetric(vertical: 3),
                 child: Row(children: [

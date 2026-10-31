@@ -2,12 +2,16 @@ import '../data/repo.dart';
 import '../util/format.dart';
 import 'report_doc.dart';
 
+/// The line printed under a draft order unless the user changed it (Settings, or
+/// while printing).
+const defaultDraftFooter = 'قیمت‌های فوق با توجه به نوسانات قیمت متریال و مواد مصرفی تنها ۴۸ ساعت اعتبار دارد';
+
 String _q(double q) => faDigits(q == q.roundToDouble() ? '${q.round()}' : q.toStringAsFixed(2));
 
 /// An order (or a draft of one) for the customer: the products with prices,
 /// the total, the advance (planned for a draft, received for an order), the
 /// delivery date and the cheques received as advance.
-ReportDoc orderDoc(Order o, Party? party, List<Cheque> cheques, Map<String, String> units) {
+ReportDoc orderDoc(Order o, Party? party, List<Cheque> cheques, Map<String, String> units, {String draftFooter = defaultDraftFooter}) {
   final draft = o.isDraft;
   final advance = draft ? o.planned : o.advance;
   final rest = o.total - advance;
@@ -50,7 +54,7 @@ ReportDoc orderDoc(Order o, Party? party, List<Cheque> cheques, Map<String, Stri
         ),
     ],
     footnote: [
-      if (draft) 'این برگه پیش‌نویس سفارش است و تا دریافت پیش‌دریافت و تأیید نهایی، سفارش قطعی نیست.',
+      if (draft && draftFooter.trim().isNotEmpty) draftFooter.trim(),
       if (o.note.isNotEmpty) 'توضیحات: ${o.note}',
     ].join('\n'),
   );

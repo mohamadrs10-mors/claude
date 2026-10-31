@@ -92,8 +92,11 @@ void main() {
     expect(boxes.keys.any((k) => k.contains('پیش‌دریافت پیشنهادی')), isTrue);
     expect(boxes['مانده بعد از پیش‌دریافت'], moneyC(150000));
     expect(boxes['تاریخ تحویل'], jalaliText('2025-03-30'));
-    expect(doc.footnote, contains('پیش‌نویس'));
+    expect(doc.footnote, contains('قیمت‌های فوق با توجه به نوسانات قیمت متریال و مواد مصرفی تنها ۴۸ ساعت اعتبار دارد'));
     expect(doc.footnote, contains('تحویل در انبار'));
+    // The line is editable: another text replaces it, an empty one removes it.
+    expect(orderDoc(o, ali, const [], {prod.id: 'کیسه'}, draftFooter: 'اعتبار این برگه ۷۲ ساعت است').footnote, allOf(contains('۷۲ ساعت'), isNot(contains('۴۸ ساعت'))));
+    expect(orderDoc(o, ali, const [], {prod.id: 'کیسه'}, draftFooter: '  ').footnote, 'توضیحات: تحویل در انبار');
     final t = doc.tables.single;
     expect(t.rows.single, ['۱', 'برنج', '۱۲.۵۰ کیسه', money(20000), money(250000)]);
     expect(t.rows.every((row) => row.length == t.headers.length), isTrue);
@@ -104,7 +107,7 @@ void main() {
     o = (await r.orders()).single;
     doc = orderDoc(o, ali, await r.cheques(), {prod.id: 'کیسه'});
     expect(doc.title, 'سفارش مشتری');
-    expect(doc.footnote, isNot(contains('پیش‌نویس')));
+    expect(doc.footnote, isNot(contains('۴۸ ساعت'))); // the closing line is for drafts only
     expect(doc.tables.length, 2);
     expect(doc.tables[1].rows.single.last, money(40000));
     for (final tb in doc.tables) {

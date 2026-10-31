@@ -5,6 +5,7 @@ import '../data/backup_service.dart';
 import '../data/repo.dart';
 import '../util/format.dart';
 import 'app_theme.dart';
+import '../print/order_docs.dart' show defaultDraftFooter;
 import '../print/print_settings.dart';
 import '../print/report_doc.dart';
 import '../data/access.dart';
@@ -25,8 +26,8 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   late final Map<String, TextEditingController> ctl = {
-    for (final k in ['business_name', 'business_phone', 'business_address', 'business_tax_id', 'invoice_footer', 'default_tax'])
-      k: TextEditingController(text: widget.repo.setting(k)),
+    for (final k in ['business_name', 'business_phone', 'business_address', 'business_tax_id', 'invoice_footer', 'draft_footer', 'default_tax'])
+      k: TextEditingController(text: widget.repo.setting(k, k == 'draft_footer' ? defaultDraftFooter : '')),
   };
 
   Repo get repo => widget.repo;
@@ -91,7 +92,7 @@ class _SettingsPageState extends State<SettingsPage> {
   Future<void> _saveBusiness() async {
     for (final e in ctl.entries) {
       final v = e.key == 'default_tax' ? '${parseAmount(e.value.text).clamp(0, 100)}' : e.value.text.trim();
-      if (repo.setting(e.key) != v) await repo.setSetting(e.key, v);
+      if (repo.setting(e.key, e.key == 'draft_footer' ? defaultDraftFooter : '') != v) await repo.setSetting(e.key, v);
     }
     if (mounted) toast(context, 'اطلاعات ذخیره شد.');
   }
@@ -224,6 +225,13 @@ class _SettingsPageState extends State<SettingsPage> {
               gap(),
               TextField(controller: ctl['invoice_footer'], decoration: const InputDecoration(labelText: 'متن پایین فاکتور (مثلاً شرایط ضمانت)')),
               gap(),
+              TextField(
+                controller: ctl['draft_footer'],
+                minLines: 1,
+                maxLines: 3,
+                decoration: const InputDecoration(labelText: 'متن پایین پیش‌نویس سفارش', helperText: 'زیر برگهٔ چاپی پیش‌نویس می‌آید؛ خالی = چیزی چاپ نشود. هنگام چاپ هم می‌توانید فقط برای همان چاپ عوضش کنید'),
+              ),
+              gap(),
               Row(children: [
                 Expanded(
                   child: TextField(
@@ -354,7 +362,7 @@ class _SettingsPageState extends State<SettingsPage> {
               CsvSection(repo: repo),
             ],
             gap(16),
-            const Section(title: 'دربارهٔ برنامه', child: Text('MORS ACC • نسخهٔ ۱٫۱۹\nفونت وزیرمتن (مجوز OFL)')),
+            const Section(title: 'دربارهٔ برنامه', child: Text('MORS ACC • نسخهٔ ۱٫۱۹٫۱\nفونت وزیرمتن (مجوز OFL)')),
           ]),
         );
         },
