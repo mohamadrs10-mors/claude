@@ -36,7 +36,7 @@ const syncTables = [
   'recurring_expenses',
 ];
 
-const _schemaVersion = 16;
+const _schemaVersion = 17;
 
 const _v2Tables = [
   '''CREATE TABLE products (
@@ -126,6 +126,11 @@ const _v10Tables = [
   '''CREATE TABLE users (
     id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE, full_name TEXT NOT NULL DEFAULT '', role_id TEXT NOT NULL,
     salt TEXT NOT NULL, hash TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT '')''',
+];
+
+/// Delivery date of an order (تاریخ تحویل); an order can also be a draft.
+const _v17Tables = [
+  "ALTER TABLE orders ADD COLUMN delivery_date TEXT NOT NULL DEFAULT ''",
 ];
 
 /// Standing monthly expenses (هزینهٔ ثابت: اجاره، اینترنت...) that are
@@ -335,6 +340,7 @@ final _schema = [
   ..._v14Tables, // after the tables its indexes belong to
   ..._v15Tables,
   ..._v16Tables,
+  ..._v17Tables,
 ];
 
 /// Orders made before orders could hold several products have one product in
@@ -494,6 +500,11 @@ class AppDb {
           }
           if (from < 16) {
             for (final q in _v16Tables) {
+              await db.execute(q);
+            }
+          }
+          if (from < 17) {
+            for (final q in _v17Tables) {
               await db.execute(q);
             }
           }

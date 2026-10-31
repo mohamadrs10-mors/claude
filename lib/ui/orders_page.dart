@@ -1,41 +1,63 @@
 import 'package:flutter/material.dart';
 
 import '../data/repo.dart';
+import '../print/order_docs.dart';
 import '../util/format.dart';
 import 'auth.dart';
 import 'common.dart';
 import 'invoices_page.dart';
 import 'parties_page.dart';
 import 'cheques_page.dart';
+import 'print_dialog.dart';
 import 'products_page.dart';
 
 /// Orders with an advance payment: the customer orders a quantity of a
 /// product and pays part of it up front; every sale invoice made for the
 /// order counts that percent as already paid.
-class OrdersPage extends StatelessWidget {
+class OrdersPage extends StatefulWidget {
   const OrdersPage({super.key, required this.repo});
   final Repo repo;
+  @override
+  State<OrdersPage> createState() => _OrdersPageState();
+}
+
+class _OrdersPageState extends State<OrdersPage> {
+  String filter = 'all'; // all | open | draft | closed
+
+  Repo get repo => widget.repo;
 
   @override
   Widget build(BuildContext context) => RepoBuilder<(List<Order>, Map<String, String>)>(
         repo: repo,
         load: () async => (await repo.orders(), {for (final p in await repo.parties()) p.id: p.name}),
         builder: (c, d) {
-          final (list, names) = d;
-          final held = list.fold<int>(0, (a, o) => a + o.available);
+          final (all, names) = d;
+          final held = all.fold<int>(0, (a, o) => a + o.available);
+          final list = [
+            for (final o in all)
+              if (switch (filter) { 'open' => o.open, 'draft' => o.isDraft, 'closed' => o.status == 'closed', _ => true }) o
+          ];
+          final today = todayIso();
+          final canEdit = AccessScope.of(context).canEdit('orders');
           return Scaffold(
             body: Constrained(
-              child: ListView(padding: const EdgeInsets.fromLTRB(16, 8, 16, 96), children: [
+              child: ListView(padding: const EdgeInsets.fromLTRB(16, 8, 16, 120), children: [
                 StatCard(title: 'پیش‌دریافت‌های هنوز کسرنشده', value: moneyC(held), icon: Icons.savings_outlined, color: Colors.orange.shade800),
                 const SizedBox(height: 8),
                 Text(
                   'مشتری سفارش یک کالا را می‌دهد و بخشی از مبلغ را پیش‌پرداخت می‌کند. این پول به حساب شما می‌رود ولی مشتری بستانکار نمی‌شود. '
-                  'روی هر فاکتور فروشی که برای این سفارش بزنید، همان درصد پیش‌دریافت از جمع فاکتور پرداخت‌شده حساب می‌شود و مشتری فقط بدهکار مانده است.',
+                  'روی هر فاکتور فروشی که برای این سفارش بزنید، همان درصد پیش‌دریافت از جمع فاکتور پرداخت‌شده حساب می‌شود و مشتری فقط بدهکار مانده است. '
+                  'قبل از سفارش قطعی، «پیش‌نویس سفارش» بزنید و برای مشتری چاپ کنید؛ بعداً با یک کلیک به سفارش تبدیل می‌شود.',
                   style: Theme.of(c).textTheme.bodySmall,
                 ),
+                const SizedBox(height: 10),
+                Wrap(spacing: 8, children: [
+                  for (final (id, t) in const [('all', 'همه'), ('open', 'باز'), ('draft', 'پیش‌نویس'), ('closed', 'بسته‌شده')])
+                    ChoiceChip(label: Text(t), selected: filter == id, onSelected: (_) => setState(() => filter = id)),
+                ]),
                 const SizedBox(height: 12),
                 if (list.isEmpty)
-                  emptyState('سفارشی ثبت نشده است.')
+                  emptyState(filter == 'draft' ? 'پیش‌نویسی ثبت نشده است.' : 'سفارشی ثبت نشده است.')
                 else
                   Card(
                     child: Column(children: [
@@ -48,11 +70,17 @@ class OrdersPage extends StatelessWidget {
                             child: Text(faDigits('${list[i].number}'), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
                           ),
                           title: Text('${names[list[i].partyId] ?? '؟'} • ${list[i].title}', style: const TextStyle(fontWeight: FontWeight.w600)),
-                          subtitle: Text('${faDigits('${list[i].items.length}')} قلم • پیش‌دریافت ${faDigits(qtyText(list[i].percent))}٪ • فاکتورشده ${faDigits('${(list[i].progress * 100).round()}')}٪'),
+                          subtitle: Text(
+                            list[i].isDraft
+                                ? '${faDigits('${list[i].items.length}')} قلم • پیش‌دریافت پیشنهادی ${moneyC(list[i].planned)} (${faDigits(qtyText(list[i].percent))}٪)${list[i].deliveryDate.isEmpty ? '' : ' • تحویل ${faDigits(jalaliText(list[i].deliveryDate))}'}'
+                                : '${faDigits('${list[i].items.length}')} قلم • پیش‌دریافت ${faDigits(qtyText(list[i].percent))}٪ • فاکتورشده ${faDigits('${(list[i].progress * 100).round()}')}٪${list[i].deliveryDate.isEmpty ? '' : ' • تحویل ${faDigits(jalaliText(list[i].deliveryDate))}'}',
+                          ),
                           trailing: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.end, children: [
                             Text(money(list[i].total), style: const TextStyle(fontWeight: FontWeight.w700)),
                             const SizedBox(height: 4),
-                            StatusChip(list[i].open ? 'باز' : 'بسته‌شده', list[i].open ? Colors.green.shade700 : Colors.blueGrey),
+                            list[i].isDraft
+                                ? StatusChip('پیش‌نویس', Colors.orange.shade800)
+                                : (list[i].lateAt(today) ? StatusChip('تحویل گذشته', Colors.red.shade700) : StatusChip(list[i].open ? 'باز' : 'بسته‌شده', list[i].open ? Colors.green.shade700 : Colors.blueGrey)),
                           ]),
                           onTap: () => Navigator.push(c, MaterialPageRoute<void>(builder: (_) => OrderViewPage(repo: repo, orderId: list[i].id))),
                         ),
@@ -61,18 +89,30 @@ class OrdersPage extends StatelessWidget {
                   ),
               ]),
             ),
-            floatingActionButton: !AccessScope.of(context).canEdit('orders') ? null : FloatingActionButton.extended(
-              onPressed: () => openOrderEditor(c, repo),
-              icon: const Icon(Icons.add),
-              label: const Text('سفارش جدید'),
-            ),
+            floatingActionButton: !canEdit
+                ? null
+                : Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.end, children: [
+                    FloatingActionButton.extended(
+                      heroTag: 'draft',
+                      onPressed: () => openOrderEditor(c, repo, draft: true),
+                      icon: const Icon(Icons.edit_note),
+                      label: const Text('پیش‌نویس سفارش'),
+                    ),
+                    const SizedBox(height: 10),
+                    FloatingActionButton.extended(
+                      heroTag: 'order',
+                      onPressed: () => openOrderEditor(c, repo),
+                      icon: const Icon(Icons.add),
+                      label: const Text('سفارش جدید'),
+                    ),
+                  ]),
           );
         },
       );
 }
 
-Future<void> openOrderEditor(BuildContext c, Repo repo, {String? id}) =>
-    Navigator.push(c, MaterialPageRoute<void>(builder: (_) => OrderEditPage(repo: repo, orderId: id)));
+Future<void> openOrderEditor(BuildContext c, Repo repo, {String? id, bool draft = false, bool convert = false}) =>
+    Navigator.push(c, MaterialPageRoute<void>(builder: (_) => OrderEditPage(repo: repo, orderId: id, draft: draft, convert: convert)));
 
 class OrderViewPage extends StatelessWidget {
   const OrderViewPage({super.key, required this.repo, required this.orderId});
@@ -93,6 +133,9 @@ class OrderViewPage extends StatelessWidget {
         builder: (c, d) {
           final (o, party, invoices, units, cheques) = d;
           if (o == null) return const Scaffold(body: Center(child: Text('این سفارش حذف شد.')));
+          final canEdit = AccessScope.of(c).canEdit('orders');
+          final draft = o.isDraft;
+          Future<void> printIt() => printReport(c, repo, orderDoc(o, party, cheques, units));
           Widget row(String l, String v, {bool bold = false}) => Padding(
                 padding: const EdgeInsets.symmetric(vertical: 3),
                 child: Row(children: [
@@ -103,14 +146,15 @@ class OrderViewPage extends StatelessWidget {
               );
           return Scaffold(
             appBar: AppBar(
-              title: Text('سفارش ${faDigits('${o.number}')}'),
+              title: Text('${draft ? 'پیش‌نویس سفارش' : 'سفارش'} ${faDigits('${o.number}')}'),
               actions: [
-                IconButton(tooltip: 'ویرایش', icon: const Icon(Icons.edit_outlined), onPressed: () => openOrderEditor(c, repo, id: o.id)),
-                IconButton(
+                IconButton(tooltip: 'چاپ', icon: const Icon(Icons.print_outlined), onPressed: printIt),
+                if (canEdit) IconButton(tooltip: 'ویرایش', icon: const Icon(Icons.edit_outlined), onPressed: () => openOrderEditor(c, repo, id: o.id, draft: draft)),
+                if (canEdit) IconButton(
                   tooltip: 'حذف',
                   icon: const Icon(Icons.delete_outline),
                   onPressed: () async {
-                    if (!await confirm(c, 'این سفارش و دریافت پیش‌دریافتش حذف شود؟')) return;
+                    if (!await confirm(c, draft ? 'این پیش‌نویس حذف شود؟' : 'این سفارش و دریافت پیش‌دریافتش حذف شود؟')) return;
                     final err = await repo.deleteOrder(o.id);
                     if (!c.mounted) return;
                     if (err != null) {
@@ -131,9 +175,14 @@ class OrderViewPage extends StatelessWidget {
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       Row(children: [
                         Expanded(child: Text(party?.name ?? '؟', style: Theme.of(c).textTheme.titleMedium)),
-                        StatusChip(o.open ? 'باز' : 'بسته‌شده', o.open ? Colors.green.shade700 : Colors.blueGrey),
+                        draft ? StatusChip('پیش‌نویس', Colors.orange.shade800) : StatusChip(o.open ? 'باز' : 'بسته‌شده', o.open ? Colors.green.shade700 : Colors.blueGrey),
                       ]),
                       Text('تاریخ: ${jalaliText(o.date)}'),
+                      if (o.deliveryDate.isNotEmpty)
+                        Row(children: [
+                          Text('تاریخ تحویل: ${faDigits(jalaliText(o.deliveryDate))}'),
+                          if (o.lateAt(todayIso())) ...[const SizedBox(width: 8), StatusChip('تحویل گذشته', Colors.red.shade700)],
+                        ]),
                       if (o.note.isNotEmpty) Text('توضیحات: ${o.note}'),
                       const Divider(height: 24),
                       Text('کالاهای سفارش', style: Theme.of(c).textTheme.titleSmall),
@@ -144,11 +193,15 @@ class OrderViewPage extends StatelessWidget {
                           Text(money(it.total)),
                         ]),
                         Text(
-                          '${qtyText(it.qty)} ${units[it.productId] ?? ''} × ${money(it.unitPrice)}  •  فاکتورشده ${qtyText(it.invoicedQty)} از ${qtyText(it.qty)}',
+                          draft
+                              ? '${qtyText(it.qty)} ${units[it.productId] ?? ''} × ${money(it.unitPrice)}'
+                              : '${qtyText(it.qty)} ${units[it.productId] ?? ''} × ${money(it.unitPrice)}  •  فاکتورشده ${qtyText(it.invoicedQty)} از ${qtyText(it.qty)}',
                           style: Theme.of(c).textTheme.bodySmall,
                         ),
-                        const SizedBox(height: 4),
-                        LinearProgressIndicator(value: it.qty <= 0 ? 0 : (it.invoicedQty / it.qty).clamp(0, 1).toDouble()),
+                        if (!draft) ...[
+                          const SizedBox(height: 4),
+                          LinearProgressIndicator(value: it.qty <= 0 ? 0 : (it.invoicedQty / it.qty).clamp(0, 1).toDouble()),
+                        ],
                         const SizedBox(height: 10),
                       ],
                       const Divider(height: 16),
@@ -160,7 +213,15 @@ class OrderViewPage extends StatelessWidget {
                 Card(
                   child: Padding(
                     padding: const EdgeInsets.all(16),
-                    child: Column(children: [
+                    child: Column(children: draft
+                        ? [
+                            row('درصد پیش‌دریافت', '${faDigits(qtyText(o.percent))}٪'),
+                            row('پیش‌دریافت پیشنهادی', moneyC(o.planned), bold: true),
+                            row('مانده بعد از پیش‌دریافت', moneyC((o.total - o.planned).clamp(0, o.total)), bold: true),
+                            const SizedBox(height: 6),
+                            Text('هنوز پولی دریافت و ثبت نشده است؛ با «تبدیل به سفارش» پیش‌دریافت واقعی (نقد و چک) ثبت می‌شود.', style: Theme.of(c).textTheme.bodySmall),
+                          ]
+                        : [
                       row('درصد پیش‌دریافت', '${faDigits(qtyText(o.percent))}٪'),
                       row('پیش‌دریافت دریافت‌شده', moneyC(o.advance), bold: true),
                       if (o.chequeAmount > 0) ...[
@@ -175,6 +236,13 @@ class OrderViewPage extends StatelessWidget {
                 ),
                 const SizedBox(height: 12),
                 Wrap(spacing: 10, runSpacing: 10, children: [
+                  if (draft && canEdit)
+                    FilledButton.icon(
+                      onPressed: () => openOrderEditor(c, repo, id: o.id, convert: true),
+                      icon: const Icon(Icons.check_circle_outline),
+                      label: const Text('تبدیل به سفارش'),
+                    ),
+                  OutlinedButton.icon(onPressed: printIt, icon: const Icon(Icons.print_outlined), label: Text(draft ? 'چاپ برای مشتری' : 'چاپ سفارش')),
                   if (o.open)
                     FilledButton.icon(
                       onPressed: () => openInvoiceEditor(c, repo, partyId: o.partyId, orderId: o.id),
@@ -187,6 +255,7 @@ class OrderViewPage extends StatelessWidget {
                       icon: const Icon(Icons.edit_note),
                       label: const Text('ثبت چک پیش‌دریافت'),
                     ),
+                  if (!draft)
                   OutlinedButton.icon(
                     onPressed: () async {
                       final msg = o.open
@@ -200,7 +269,7 @@ class OrderViewPage extends StatelessWidget {
                     label: Text(o.open ? 'بستن سفارش' : 'بازکردن دوباره'),
                   ),
                 ]),
-                if (cheques.isNotEmpty) ...[
+                if (!draft && cheques.isNotEmpty) ...[
                   const SizedBox(height: 16),
                   Text('چک‌های پیش‌دریافت', style: Theme.of(c).textTheme.titleSmall),
                   const SizedBox(height: 8),
@@ -220,6 +289,7 @@ class OrderViewPage extends StatelessWidget {
                     ]),
                   ),
                 ],
+                if (!draft) ...[
                 const SizedBox(height: 16),
                 Text('فاکتورهای این سفارش', style: Theme.of(c).textTheme.titleSmall),
                 const SizedBox(height: 8),
@@ -237,6 +307,7 @@ class OrderViewPage extends StatelessWidget {
                         ),
                     ]),
                   ),
+                ],
               ]),
             ),
           );
@@ -245,9 +316,15 @@ class OrderViewPage extends StatelessWidget {
 }
 
 class OrderEditPage extends StatefulWidget {
-  const OrderEditPage({super.key, required this.repo, this.orderId});
+  const OrderEditPage({super.key, required this.repo, this.orderId, this.draft = false, this.convert = false});
   final Repo repo;
   final String? orderId;
+
+  /// A draft (quotation): nothing is booked, the advance is only planned.
+  final bool draft;
+
+  /// Turns the draft [orderId] into a real order (advance, account and cheques are asked).
+  final bool convert;
   @override
   State<OrderEditPage> createState() => _OrderEditPageState();
 }
@@ -299,8 +376,15 @@ class _OrderEditPageState extends State<OrderEditPage> {
   List<Product> products = [];
   List<Account> accounts = [];
   String date = todayIso();
+  String deliveryDate = '';
   String? partyId, accountId;
   bool loaded = false;
+
+  /// Saving as a draft, or as an order (also when a draft is being converted).
+  bool get isDraft => widget.draft && !widget.convert;
+
+  /// An existing order whose advance/cheques are managed from its own page.
+  bool get editingOrder => widget.orderId != null && !widget.convert && !widget.draft;
   // What the user changed last decides what follows: after typing the percent the
   // cash amount follows it; after typing the amount (or a cheque) the percent
   // follows the money received (cash + cheques) as a share of the order total.
@@ -362,9 +446,11 @@ class _OrderEditPageState extends State<OrderEditPage> {
       partyId = o.partyId;
       percent.text = qtyText(o.percent);
       _driver = null; // as saved, until the percent or the amounts are changed
-      accountId = o.accountId;
+      accountId = o.accountId ?? accounts.firstOrNull?.id;
       note.text = o.note;
-      advance.text = money(o.cash);
+      deliveryDate = o.deliveryDate;
+      // A draft carries the planned advance; turning it into an order starts from it.
+      advance.text = money(o.isDraft ? o.planned : o.cash);
       _existingCheques = o.chequeAmount;
       for (final it in o.items) {
         lines.add(_newLine(t: it.title, q: qtyText(it.qty), p: money(it.unitPrice), productId: it.productId));
@@ -423,6 +509,8 @@ class _OrderEditPageState extends State<OrderEditPage> {
         advance: parseAmount(advance.text),
         accountId: accountId,
         note: note.text.trim(),
+        deliveryDate: deliveryDate,
+        draft: isDraft,
         cheques: [
           for (final r in chequeRows)
             ChequeDraft(amount: parseAmount(r.amount.text), dueDate: r.due, number: enDigits(r.number.text.trim()), bank: r.bank.text.trim()),
@@ -438,7 +526,7 @@ class _OrderEditPageState extends State<OrderEditPage> {
   Widget build(BuildContext context) {
     if (!loaded) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     return Scaffold(
-      appBar: AppBar(title: Text(widget.orderId == null ? 'سفارش جدید' : 'ویرایش سفارش')),
+      appBar: AppBar(title: Text(widget.convert ? 'تبدیل پیش‌نویس به سفارش' : (isDraft ? (widget.orderId == null ? 'پیش‌نویس سفارش' : 'ویرایش پیش‌نویس') : (widget.orderId == null ? 'سفارش جدید' : 'ویرایش سفارش')))),
       body: Constrained(
         maxWidth: 860,
         child: Form(
@@ -488,6 +576,20 @@ class _OrderEditPageState extends State<OrderEditPage> {
                     icon: const Icon(Icons.person_add_alt),
                   ),
                 ]),
+                gap(),
+                Wrap(spacing: 8, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.local_shipping_outlined),
+                    label: Text(deliveryDate.isEmpty ? 'تاریخ تحویل (اختیاری)' : 'تحویل: ${faDigits(jalaliText(deliveryDate))}'),
+                    onPressed: () async {
+                      final r = await showDialog<String>(context: context, builder: (_) => JalaliPickerDialog(deliveryDate.isEmpty ? date : deliveryDate));
+                      if (r != null) setState(() => deliveryDate = r);
+                    },
+                  ),
+                  for (final d in const [7, 15, 30, 60])
+                    ActionChip(label: Text('${faDigits('$d')} روز بعد'), onPressed: () => setState(() => deliveryDate = isoOf(DateTime.parse(date).add(Duration(days: d))))),
+                  if (deliveryDate.isNotEmpty) IconButton(tooltip: 'حذف تاریخ تحویل', icon: const Icon(Icons.close), onPressed: () => setState(() => deliveryDate = '')),
+                ]),
               ]),
             ),
             gap(16),
@@ -514,7 +616,7 @@ class _OrderEditPageState extends State<OrderEditPage> {
             ),
             gap(16),
             Section(
-              title: 'پیش‌دریافت',
+              title: isDraft ? 'پیش‌دریافت پیشنهادی' : 'پیش‌دریافت',
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Expanded(
@@ -529,7 +631,7 @@ class _OrderEditPageState extends State<OrderEditPage> {
                   Expanded(
                     child: AmountField(
                       controller: advance,
-                      label: 'مبلغ نقدی دریافت‌شده',
+                      label: isDraft ? 'مبلغ پیش‌دریافت پیشنهادی' : 'مبلغ نقدی دریافت‌شده',
                       helper: 'درصد را بنویسید تا مبلغ حساب شود، یا مبلغ را بنویسید تا درصد از روی دریافتی‌ها (نقد + چک) حساب شود',
                     ),
                   ),
@@ -549,6 +651,7 @@ class _OrderEditPageState extends State<OrderEditPage> {
                     );
                   },
                 ),
+                if (!isDraft) ...[
                 gap(),
                 DropdownButtonFormField<String?>(
                   key: ValueKey('acc${accounts.length}'),
@@ -558,17 +661,21 @@ class _OrderEditPageState extends State<OrderEditPage> {
                   validator: (v) => parseAmount(advance.text) > 0 && v == null ? 'حساب را انتخاب کنید' : null,
                   onChanged: (v) => accountId = v,
                 ),
+                ],
                 gap(),
                 Text(
-                  'این مبلغ به حساب انتخاب‌شده اضافه می‌شود ولی مشتری بستانکار نمی‌شود. روی هر فاکتور فروش این سفارش، این درصد از بخشی از فاکتور که کالای همین سفارش است پرداخت‌شده حساب می‌شود (کالاهای دیگر فاکتور کسر ندارند).',
+                  isDraft
+                      ? 'پیش‌نویس هیچ پولی ثبت نمی‌کند و روی حساب‌ها، فاکتورها و تراز مشتری اثری ندارد؛ فقط برای چاپ و نشان دادن به مشتری است. وقتی مشتری تأیید کرد، «تبدیل به سفارش» را بزنید.'
+                      : 'این مبلغ به حساب انتخاب‌شده اضافه می‌شود ولی مشتری بستانکار نمی‌شود. روی هر فاکتور فروش این سفارش، این درصد از بخشی از فاکتور که کالای همین سفارش است پرداخت‌شده حساب می‌شود (کالاهای دیگر فاکتور کسر ندارند).',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ]),
             ),
+            if (!isDraft) ...[
             gap(16),
             Section(
               title: 'چک‌های پیش‌دریافت (اختیاری)',
-              child: widget.orderId != null
+              child: editingOrder
                   ? Text(
                       _existingCheques > 0
                           ? 'چک‌های این سفارش (${moneyC(_existingCheques)}) را از صفحهٔ خود سفارش ببینید یا ویرایش کنید؛ چک تازه هم از همان‌جا ثبت می‌شود.'
@@ -593,10 +700,11 @@ class _OrderEditPageState extends State<OrderEditPage> {
                       ),
                     ]),
             ),
+            ],
             gap(16),
             Section(title: 'توضیحات', child: TextFormField(controller: note, decoration: const InputDecoration(labelText: 'توضیحات'))),
             gap(20),
-            FilledButton.icon(onPressed: _save, icon: const Icon(Icons.check), label: const Text('ذخیره سفارش')),
+            FilledButton.icon(onPressed: _save, icon: const Icon(Icons.check), label: Text(isDraft ? 'ذخیره پیش‌نویس' : (widget.convert ? 'تبدیل به سفارش و ثبت پیش‌دریافت' : 'ذخیره سفارش'))),
           ]),
         ),
       ),

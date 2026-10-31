@@ -37,6 +37,7 @@ void main() {
   multiTests();
   chequeTests();
   percentTests();
+  draftTests();
   testWidgets('order form: advance follows qty x price x percent, saves into the cash box without crediting the customer', (tester) async {
     tester.view.physicalSize = const Size(1000, 2600);
     tester.view.devicePixelRatio = 1;
@@ -290,5 +291,64 @@ void percentTests() {
     await settle(tester);
     final o = (await tester.runAsync(repo.orders))!.single;
     expect((o.percent, o.cash, o.advance), (80.0, 80000, 80000));
+  });
+}
+
+void draftTests() {
+  testWidgets('order drafts: save one from the form with a delivery date, see it in the list and on its page, convert it to an order', (tester) async {
+    tester.view.physicalSize = const Size(1000, 3600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final repo = await seed(tester);
+    await tester.pumpWidget(MaterialApp(home: Directionality(textDirection: TextDirection.rtl, child: Scaffold(body: OrdersPage(repo: repo)))));
+    await settle(tester);
+    expect(find.text('پیش‌نویس سفارش'), findsOneWidget); // the button for a new draft
+    await tester.tap(find.text('پیش‌نویس سفارش'));
+    await settle(tester);
+    expect(find.text('تاریخ تحویل (اختیاری)'), findsOneWidget);
+    expect(find.text('چک‌های پیش‌دریافت (اختیاری)'), findsNothing); // a draft has no cheques ...
+    expect(find.widgetWithText(DropdownButtonFormField<String?>, 'واریز به حساب'), findsNothing); // ... and no account
+
+    await tester.tap(find.widgetWithText(DropdownButtonFormField<String?>, 'مشتری'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('مشتری').last);
+    await tester.pumpAndSettle();
+    await tester.enterText(find.widgetWithText(TextFormField, 'کالا'), 'برنج');
+    await tester.enterText(field2(tester, 'تعداد سفارش'), '100');
+    await tester.enterText(field2(tester, 'قیمت واحد'), '1000');
+    await tester.pump();
+    await tester.tap(find.text('۳۰ روز بعد'));
+    await tester.pump();
+    expect(find.textContaining('تحویل:'), findsOneWidget);
+    expect(parseAmount(field(tester, 'مبلغ پیش‌دریافت پیشنهادی').text), 50000);
+    await tester.tap(find.text('ذخیره پیش‌نویس'));
+    await settle(tester);
+
+    var o = (await tester.runAsync(repo.orders))!.single;
+    expect((o.isDraft, o.planned, o.total), (true, 50000, 100000));
+    expect(o.deliveryDate, isNotEmpty);
+    expect((await tester.runAsync(repo.accounts))!.single.balance, 0);
+
+    // The list shows it as a draft; its page offers printing and converting, not invoicing.
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpWidget(MaterialApp(home: Directionality(textDirection: TextDirection.rtl, child: Scaffold(body: OrdersPage(repo: repo)))));
+    await settle(tester);
+    expect(find.text('پیش‌نویس'), findsWidgets);
+    await tester.tap(find.textContaining('برنج').first);
+    await settle(tester);
+    expect(find.text('تبدیل به سفارش'), findsOneWidget);
+    expect(find.text('چاپ برای مشتری'), findsOneWidget);
+    expect(find.text('صدور فاکتور برای این سفارش'), findsNothing);
+
+    // Convert: the form now asks for the account; saving books the advance.
+    await tester.tap(find.text('تبدیل به سفارش'));
+    await settle(tester);
+    expect(find.widgetWithText(DropdownButtonFormField<String?>, 'واریز به حساب'), findsOneWidget);
+    expect(parseAmount(field(tester, 'مبلغ نقدی دریافت‌شده').text), 50000);
+    await tester.tap(find.text('تبدیل به سفارش و ثبت پیش‌دریافت'));
+    await settle(tester);
+    o = (await tester.runAsync(repo.orders))!.single;
+    expect((o.isDraft, o.open, o.cash, o.number), (false, true, 50000, 1));
+    expect((await tester.runAsync(repo.accounts))!.single.balance, 50000);
   });
 }

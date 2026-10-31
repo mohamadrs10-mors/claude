@@ -169,9 +169,22 @@ class Order {
     required this.id, required this.number, required this.date, required this.partyId,
     required this.title, required this.items, required this.percent,
     required this.cash, this.chequeAmount = 0, this.accountId, this.txId, required this.status, required this.released,
-    required this.closedDate, required this.note, required this.applied,
+    required this.closedDate, required this.note, required this.applied, this.deliveryDate = '', this.planned = 0,
   });
   final String id, date, partyId, title, status, closedDate, note;
+
+  /// Agreed delivery date (empty: none).
+  final String deliveryDate;
+
+  /// For a draft: the advance that is planned (nothing is received yet).
+  final int planned;
+
+  /// A draft (پیش‌نویس) is a quotation for the customer: no money is booked and
+  /// no invoice can be made from it until it is turned into an order.
+  bool get isDraft => status == 'draft';
+
+  /// Late: the delivery date has passed while the order is open and not fully invoiced.
+  bool lateAt(String todayIso) => open && deliveryDate.isNotEmpty && deliveryDate.compareTo(todayIso) < 0 && progress < 1;
   final String? accountId, txId;
   final int number, cash, chequeAmount, released, applied;
   final double percent;
@@ -1242,7 +1255,8 @@ class Repo extends ChangeNotifier {
         Order(
           id: r['id'] as String, number: r['number'] as int, date: r['date'] as String, partyId: r['party_id'] as String,
           title: r['title'] as String, items: byOrder[r['id']] ?? [], percent: (r['advance_percent'] as num).toDouble(),
-          cash: r['advance_amount'] as int, chequeAmount: (r['chq'] as num).round(), accountId: r['account_id'] as String?, txId: r['tx_id'] as String?,
+          cash: r['status'] == 'draft' ? 0 : r['advance_amount'] as int, planned: r['status'] == 'draft' ? r['advance_amount'] as int : 0,
+          deliveryDate: r['delivery_date'] as String, chequeAmount: r['status'] == 'draft' ? 0 : (r['chq'] as num).round(), accountId: r['account_id'] as String?, txId: r['tx_id'] as String?,
           status: r['status'] as String, released: r['released'] as int, closedDate: r['closed_date'] as String,
           note: r['note'] as String, applied: (r['applied'] as num).round(),
         )
@@ -1268,9 +1282,11 @@ class Repo extends ChangeNotifier {
     String? accountId,
     String note = '',
     List<ChequeDraft> cheques = const [],
+    String deliveryDate = '',
+    bool draft = false,
   }) async {
     if (items.isEmpty) throw StateError('حداقل یک کالا برای سفارش لازم است.');
-    if (advance > 0 && accountId == null) throw StateError('حساب دریافت پیش‌دریافت را انتخاب کنید.');
+    if (!draft && advance > 0 && accountId == null) throw StateError('حساب دریافت پیش‌دریافت را انتخاب کنید.');
     final oid = id ?? AppDb.newId();
     await store.db.transaction((tx) async {
       final no = id == null ? await _freeNumber(tx, 'orders', number) : number;
@@ -1280,12 +1296,14 @@ class Repo extends ChangeNotifier {
           : ((await tx.rawQuery('SELECT COALESCE(SUM(prepaid),0) AS n FROM invoices WHERE order_id=? AND deleted=0', [id])).first['n'] as num).round();
       final released = (old?['released'] as int?) ?? 0;
       final chequeSum = id == null ? 0 : await _orderCheques(tx, id);
-      if (advance + chequeSum < applied + released) {
+      if (!draft && advance + chequeSum < applied + released) {
         throw StateError('جمع پیش‌دریافت (نقدی و چکی) نمی‌تواند از مقدار کسرشده روی فاکتورها (${money(applied + released)}) کمتر باشد.');
       }
       final partyName = (await tx.query('parties', columns: ['name'], where: 'id=?', whereArgs: [partyId])).firstOrNull?['name'] ?? '';
       var txId = old?['tx_id'] as String?;
-      if (advance > 0) {
+      if (draft) {
+        // A draft books nothing: the advance is only what is planned.
+      } else if (advance > 0) {
         txId ??= AppDb.newId();
         await store.save('transactions', {
           'id': txId, 'date': date, 'kind': 'receipt', 'amount': advance, 'account_id': accountId,
@@ -1301,8 +1319,10 @@ class Repo extends ChangeNotifier {
       await store.save('orders', {
         'id': oid, 'number': no, 'date': date, 'party_id': partyId, 'product_id': null, 'title': summary,
         'qty': items.fold<double>(0, (a, i) => a + i.qty), 'unit_price': 0, 'advance_percent': percent, 'advance_amount': advance,
-        'account_id': accountId, 'tx_id': txId, 'status': old?['status'] ?? 'open', 'released': released,
-        'closed_date': old?['closed_date'] ?? '', 'note': note,
+        'account_id': accountId, 'tx_id': txId, 'released': released,
+        // A draft stays a draft while it is saved as one; saving it as an order opens it.
+        'status': draft ? 'draft' : (old?['status'] == null || old?['status'] == 'draft' ? 'open' : old!['status']),
+        'closed_date': old?['closed_date'] ?? '', 'note': note, 'delivery_date': deliveryDate,
       }, exec: tx);
       for (final o in await tx.query('order_items', columns: ['id'], where: 'order_id=? AND deleted=0', whereArgs: [oid])) {
         await store.softDelete('order_items', o['id'] as String, exec: tx);
@@ -1314,7 +1334,7 @@ class Repo extends ChangeNotifier {
         }, exec: tx);
       }
       // Part (or all) of the advance can come as cheques received from the customer.
-      for (final d in cheques.where((d) => d.amount > 0)) {
+      for (final d in draft ? const <ChequeDraft>[] : cheques.where((d) => d.amount > 0)) {
         await store.save('cheques', {
           'kind': 'received', 'number': d.number, 'bank': d.bank, 'amount': d.amount, 'due_date': d.dueDate,
           'party_id': partyId, 'status': 'pending', 'note': 'پیش‌دریافت سفارش ${faDigits('$no')}', 'order_id': oid,
