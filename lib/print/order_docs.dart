@@ -51,6 +51,17 @@ ReportDoc orderDoc(Order o, Party? party, List<Cheque> cheques, Map<String, Stri
           if (advance > 0) '${draft ? 'پیش‌دریافت پیشنهادی' : 'پیش‌دریافت'} به حروف: ${persianWords(advance)} $currencyLabel',
         ].join('\n'),
       ),
+      // The cash part of the advance, marked as received.
+      if (!draft && o.cash > 0 && show('cash'))
+        ReportTable(
+          heading: 'پیش‌دریافت نقدی',
+          headers: const ['تاریخ', 'شرح', 'وضعیت', 'مبلغ'],
+          cols: const [Col.center, Col.text, Col.center, Col.number],
+          flex: const [1.5, 3, 1.6, 2],
+          rows: [
+            [jalaliText(o.date), 'مبلغ نقدی پیش‌دریافت', 'دریافت شد', money(o.cash)],
+          ],
+        ),
       if (!draft && cheques.isNotEmpty && show('cheques'))
         ReportTable(
           heading: 'چک‌های پیش‌دریافت',
@@ -61,6 +72,8 @@ ReportDoc orderDoc(Order o, Party? party, List<Cheque> cheques, Map<String, Stri
             for (final c in cheques)
               [jalaliText(c.dueDate), faDigits(c.number), c.bank, switch (c.status) { 'cleared' => 'وصول شده', 'bounced' => 'برگشتی', _ => 'در انتظار' }, money(c.amount)],
           ],
+          // Bounced cheques are listed but do not count.
+          totals: ['', '', '', 'جمع چک‌ها', money(cheques.where((c) => c.status != 'bounced').fold(0, (a, c) => a + c.amount))],
         ),
     ],
     kind: kind,

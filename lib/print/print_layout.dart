@@ -39,7 +39,7 @@ const printKinds = <PrintKind>[
   PrintKind('roll', 'رسید حرارتی', [_logo, _phone, PrintElement('party', 'نام مشتری'), PrintElement('footer', 'متن پایین')]),
   PrintKind('order', 'سفارش', [
     _logo, _address, _partyPhone, PrintElement('delivery', 'تاریخ تحویل'), _summary, _rowNo,
-    PrintElement('words', 'مبلغ به حروف'), PrintElement('cheques', 'جدول چک‌های پیش‌دریافت'), _note, _signatures, _pageNo,
+    PrintElement('words', 'مبلغ به حروف'), PrintElement('cash', 'پیش‌دریافت نقدی (دریافت شد)'), PrintElement('cheques', 'جدول چک‌های پیش‌دریافت و جمع آن'), _note, _signatures, _pageNo,
   ]),
   PrintKind('draft', 'پیش‌نویس سفارش', [
     _logo, _address, _partyPhone, PrintElement('delivery', 'تاریخ تحویل'), _summary, _rowNo,

@@ -66,12 +66,12 @@ void main() {
     expect(full.kind, 'order');
     expect(full.tables.first.headers.length, 5);
     expect(full.tables.first.caption, isNotEmpty);
-    expect(full.tables.length, 2);
+    expect(full.tables.length, 3); // items, cash received, cheques
     expect({for (final (k, _) in full.summary) k}, contains('تاریخ تحویل'));
     expect(full.subtitle, contains('09121234567'.replaceAll('0', '۰').replaceAll('9', '۹').replaceAll('1', '۱').replaceAll('2', '۲').replaceAll('3', '۳').replaceAll('4', '۴').replaceAll('5', '۵').replaceAll('6', '۶').replaceAll('7', '۷')));
 
     var l = const PrintLayout();
-    for (final k in ['rownum', 'words', 'cheques', 'delivery', 'party_phone']) {
+    for (final k in ['rownum', 'words', 'cash', 'cheques', 'delivery', 'party_phone']) {
       l = l.withShow('order', k, false);
     }
     final slim = orderDoc(o, ali, cheques, const {}, layout: l);

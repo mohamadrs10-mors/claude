@@ -130,10 +130,17 @@ void main() {
     expect(doc.closing, ''); // the validity line is for drafts only
     expect(doc.signatures.length, 2);
     expect(doc.tables.first.caption, contains('پیش‌دریافت به حروف: صد هزار'));
-    expect(doc.tables.length, 2);
-    expect(doc.tables[1].rows.single.last, money(40000));
+    // items, the cash received (marked as received), the cheques with their total
+    expect(doc.tables.length, 3);
+    expect(doc.tables[1].heading, 'پیش‌دریافت نقدی');
+    expect(doc.tables[1].rows.single, contains('دریافت شد'));
+    expect(doc.tables[1].rows.single.last, money(60000)); // the cash part; cheques are extra
+    expect(doc.tables[2].rows.single.last, money(40000));
+    expect(doc.tables[2].totals!.last, money(40000));
+    expect(doc.tables[2].totals![3], 'جمع چک‌ها');
     for (final tb in doc.tables) {
       expect(tb.rows.every((row) => row.length == tb.headers.length), isTrue);
+      if (tb.totals != null) expect(tb.totals!.length, tb.headers.length);
     }
     expect({for (final (k, v) in doc.summary) k: v}['مانده بعد از پیش‌دریافت'], moneyC(150000));
   });
