@@ -9,7 +9,7 @@ import 'package:simple_accounting/ui/expenses_page.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 Future<void> settle(WidgetTester t) async {
-  for (var i = 0; i < 6; i++) {
+  for (var i = 0; i < 14; i++) {
     await t.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
     await t.pump(const Duration(milliseconds: 150));
   }

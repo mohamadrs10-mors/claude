@@ -56,7 +56,7 @@ Future<Env> env(WidgetTester t, {bool withUsers = true}) async {
 }
 
 Future<void> settle(WidgetTester t) async {
-  for (var i = 0; i < 4; i++) {
+  for (var i = 0; i < 14; i++) {
     await t.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 120)));
     await t.pump();
   }
