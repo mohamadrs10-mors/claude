@@ -222,6 +222,13 @@ void main() {
       await raw.execute('DROP TABLE $t'); // version 15
     }
     await raw.execute('ALTER TABLE orders DROP COLUMN delivery_date'); // version 17
+    // version 18 (order_items was dropped above and comes back with the column)
+    for (final t in const ['invoices', 'orders', 'deliveries']) {
+      await raw.execute('ALTER TABLE $t DROP COLUMN items_ver');
+    }
+    for (final t in const ['invoice_items', 'delivery_items']) {
+      await raw.execute('ALTER TABLE $t DROP COLUMN ver');
+    }
     await raw.execute('DROP TABLE recurring_expenses'); // version 16
     await raw.execute('ALTER TABLE transactions DROP COLUMN payslip_id');
     await raw.execute('ALTER TABLE transactions DROP COLUMN employee_id');

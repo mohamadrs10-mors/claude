@@ -36,7 +36,7 @@ const syncTables = [
   'recurring_expenses',
 ];
 
-const _schemaVersion = 17;
+const _schemaVersion = 18;
 
 const _v2Tables = [
   '''CREATE TABLE products (
@@ -127,6 +127,26 @@ const _v10Tables = [
     id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE, full_name TEXT NOT NULL DEFAULT '', role_id TEXT NOT NULL,
     salt TEXT NOT NULL, hash TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT '')''',
 ];
+
+/// A document and its lines are saved together as one "version": the parent row
+/// carries [items_ver], every line saved with it the same [ver]. When two devices
+/// edit the same document, sync keeps only the lines of the winning version
+/// instead of mixing the lines of both.
+const _v18Tables = [
+  'ALTER TABLE invoices ADD COLUMN items_ver TEXT',
+  'ALTER TABLE invoice_items ADD COLUMN ver TEXT',
+  'ALTER TABLE orders ADD COLUMN items_ver TEXT',
+  'ALTER TABLE order_items ADD COLUMN ver TEXT',
+  'ALTER TABLE deliveries ADD COLUMN items_ver TEXT',
+  'ALTER TABLE delivery_items ADD COLUMN ver TEXT',
+];
+
+/// parent table -> (line table, column of the line table that points to the parent)
+const _lineTables = {
+  'invoices': ('invoice_items', 'invoice_id'),
+  'orders': ('order_items', 'order_id'),
+  'deliveries': ('delivery_items', 'delivery_id'),
+};
 
 /// Delivery date of an order (تاریخ تحویل); an order can also be a draft.
 const _v17Tables = [
@@ -341,6 +361,7 @@ final _schema = [
   ..._v15Tables,
   ..._v16Tables,
   ..._v17Tables,
+  ..._v18Tables,
 ];
 
 /// Orders made before orders could hold several products have one product in
@@ -508,6 +529,11 @@ class AppDb {
               await db.execute(q);
             }
           }
+          if (from < 18) {
+            for (final q in _v18Tables) {
+              await db.execute(q);
+            }
+          }
         },
         onCreate: (db, _) async {
           for (final s in _schema) {
@@ -638,8 +664,40 @@ class AppDb {
           arrived?.add(row['id'] as String);
         }
       }
+      applied += await _keepWinningLines(tx, data);
     });
     return applied;
+  }
+
+  /// After rows arrive, a document keeps only the lines of its current version.
+  /// Without this, two devices that edited the same invoice would leave the lines
+  /// of both versions on it (extra, mixed or doubled lines). Lines from before
+  /// versions existed (no [ver]) are dropped only when the document has a version.
+  Future<int> _keepWinningLines(DatabaseExecutor tx, Map<String, dynamic> data) async {
+    var fixed = 0;
+    for (final e in _lineTables.entries) {
+      final parent = e.key;
+      final (lines, fk) = e.value;
+      final touched = <String>{
+        for (final r in (data[parent] as List?) ?? const []) (r as Map)['id'] as String,
+        for (final r in (data[lines] as List?) ?? const []) if ((r as Map)[fk] is String) r[fk] as String,
+      };
+      for (final id in touched) {
+        final p = await tx.query(parent, columns: ['items_ver'], where: 'id=?', whereArgs: [id]);
+        final ver = p.firstOrNull?['items_ver'];
+        if (ver == null) continue;
+        final stale = await tx.query(lines, columns: ['id'], where: 'deleted=0 AND $fk=? AND (ver IS NULL OR ver<>?)', whereArgs: [id, ver]);
+        for (final l in stale) {
+          await tx.update(
+              lines,
+              {'deleted': 1, 'updated_at': DateTime.now().toUtc().millisecondsSinceEpoch, 'device_id': deviceId, 'seq': await _nextSeq(tx)},
+              where: 'id=?',
+              whereArgs: [l['id']]);
+          fixed++;
+        }
+      }
+    }
+    return fixed;
   }
 
   /// Gives a new number to documents that ended up with the same number on

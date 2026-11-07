@@ -1114,6 +1114,7 @@ class Repo extends ChangeNotifier {
     String? dueDate,
   }) async {
     final invId = id ?? AppDb.newId();
+    final ver = AppDb.newId(); // this save's version of the lines
     await store.db.transaction((tx) async {
       // A new document takes the number it asked for only if it is still free;
       // otherwise the next free one (another device may have used it meanwhile).
@@ -1145,7 +1146,7 @@ class Repo extends ChangeNotifier {
         'party_id': partyId, 'discount': discount, 'tax_percent': taxPercent, 'note': note, 'ref_id': keepRef,
         'order_id': linked, 'prepaid': prepaid,
         'warehouse_id': warehouseId == mainWarehouseId ? null : warehouseId,
-        'due_date': kind == 'proforma' ? null : dueDate,
+        'due_date': kind == 'proforma' ? null : dueDate, 'items_ver': ver,
       }, exec: tx);
       final old = await tx.query('invoice_items',
           columns: ['id'], where: 'invoice_id=? AND deleted=0', whereArgs: [invId]);
@@ -1155,7 +1156,7 @@ class Repo extends ChangeNotifier {
       for (var i = 0; i < items.length; i++) {
         await store.save('invoice_items', {
           'invoice_id': invId, 'title': items[i].title, 'qty': items[i].qty,
-          'unit_price': items[i].unitPrice, 'position': i, 'product_id': items[i].productId,
+          'unit_price': items[i].unitPrice, 'position': i, 'product_id': items[i].productId, 'ver': ver,
         }, exec: tx);
       }
     });
@@ -1297,6 +1298,7 @@ class Repo extends ChangeNotifier {
     if (items.isEmpty) throw StateError('حداقل یک کالا برای سفارش لازم است.');
     if (!draft && advance > 0 && accountId == null) throw StateError('حساب دریافت پیش‌دریافت را انتخاب کنید.');
     final oid = id ?? AppDb.newId();
+    final ver = AppDb.newId();
     await store.db.transaction((tx) async {
       final no = id == null ? await _freeNumber(tx, 'orders', number) : number;
       final old = id == null ? null : (await tx.query('orders', where: 'id=?', whereArgs: [id])).firstOrNull;
@@ -1331,7 +1333,7 @@ class Repo extends ChangeNotifier {
         'account_id': accountId, 'tx_id': txId, 'released': released,
         // A draft stays a draft while it is saved as one; saving it as an order opens it.
         'status': draft ? 'draft' : (old?['status'] == null || old?['status'] == 'draft' ? 'open' : old!['status']),
-        'closed_date': old?['closed_date'] ?? '', 'note': note, 'delivery_date': deliveryDate,
+        'closed_date': old?['closed_date'] ?? '', 'note': note, 'delivery_date': deliveryDate, 'items_ver': ver,
       }, exec: tx);
       for (final o in await tx.query('order_items', columns: ['id'], where: 'order_id=? AND deleted=0', whereArgs: [oid])) {
         await store.softDelete('order_items', o['id'] as String, exec: tx);
@@ -1339,7 +1341,7 @@ class Repo extends ChangeNotifier {
       for (var i = 0; i < items.length; i++) {
         await store.save('order_items', {
           'order_id': oid, 'product_id': items[i].productId, 'title': items[i].title, 'qty': items[i].qty,
-          'unit_price': items[i].unitPrice, 'position': i,
+          'unit_price': items[i].unitPrice, 'position': i, 'ver': ver,
         }, exec: tx);
       }
       // Part (or all) of the advance can come as cheques received from the customer.
@@ -1420,11 +1422,12 @@ class Repo extends ChangeNotifier {
     required List<DeliveryItem> items,
   }) async {
     final did = id ?? AppDb.newId();
+    final ver = AppDb.newId();
     await store.db.transaction((tx) async {
       final no = id == null ? await _freeNumber(tx, 'deliveries', number) : number;
       await store.save('deliveries', {
         'id': did, 'number': no, 'date': date, 'party_id': partyId,
-        'recipient': recipient, 'address': address, 'note': note,
+        'recipient': recipient, 'address': address, 'note': note, 'items_ver': ver,
       }, exec: tx);
       final old = await tx.query('delivery_items',
           columns: ['id'], where: 'delivery_id=? AND deleted=0', whereArgs: [did]);
@@ -1434,7 +1437,7 @@ class Repo extends ChangeNotifier {
       for (var i = 0; i < items.length; i++) {
         await store.save('delivery_items', {
           'delivery_id': did, 'title': items[i].title, 'qty': items[i].qty,
-          'unit': items[i].unit, 'position': i, 'product_id': items[i].productId,
+          'unit': items[i].unit, 'position': i, 'product_id': items[i].productId, 'ver': ver,
         }, exec: tx);
       }
     });
