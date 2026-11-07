@@ -78,6 +78,7 @@ class EmployeesTab extends StatelessWidget {
     var keep = ([...group]..sort((a, b) => (counts[b.id] ?? 0).compareTo(counts[a.id] ?? 0))).first.id;
     String? error;
     await showDialog<void>(
+      barrierDismissible: false, // typed data is never lost by a stray tap outside
       context: context,
       builder: (dc) => StatefulBuilder(
         builder: (dc, set) => AlertDialog(
@@ -183,6 +184,7 @@ Future<void> editEmployee(BuildContext context, Repo repo, Employee? e) async {
   String? error;
 
   await showDialog<void>(
+    barrierDismissible: false, // typed data is never lost by a stray tap outside
     context: context,
     builder: (dc) => StatefulBuilder(
       builder: (dc, set) => AlertDialog(
@@ -356,6 +358,7 @@ class _AttendanceTabState extends State<AttendanceTab> {
     final inT = TextEditingController(), outT = TextEditingController(), note = TextEditingController(), leaveH = TextEditingController();
     String? error;
     await showDialog<void>(
+      barrierDismissible: false, // typed data is never lost by a stray tap outside
       context: context,
       builder: (dc) => StatefulBuilder(
         builder: (dc, set) => AlertDialog(
@@ -417,6 +420,7 @@ class _AttendanceTabState extends State<AttendanceTab> {
   Future<void> _holidays() async {
     var set0 = repo.payrollHolidays;
     await showDialog<void>(
+      barrierDismissible: false, // typed data is never lost by a stray tap outside
       context: context,
       builder: (dc) => StatefulBuilder(
         builder: (dc, set) => AlertDialog(
@@ -801,6 +805,7 @@ class _PayslipPageState extends State<PayslipPage> {
     final note = TextEditingController();
     String? error;
     await showDialog<void>(
+      barrierDismissible: false, // typed data is never lost by a stray tap outside
       context: context,
       builder: (dc) => StatefulBuilder(
         builder: (dc, set) => AlertDialog(
@@ -855,6 +860,7 @@ class _PayslipPageState extends State<PayslipPage> {
     final note = TextEditingController();
     String? error;
     await showDialog<void>(
+      barrierDismissible: false, // typed data is never lost by a stray tap outside
       context: context,
       builder: (dc) => StatefulBuilder(
         builder: (dc, set) => AlertDialog(

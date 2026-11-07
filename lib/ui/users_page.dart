@@ -168,6 +168,7 @@ class _UsersPageState extends State<UsersPage> with SingleTickerProviderStateMix
     var role = u?.roleId ?? (d.roles.any((r) => r.id == 'seller') ? 'seller' : d.roles.first.id);
     var active = u?.active ?? true;
     await showDialog<void>(
+      barrierDismissible: false, // typed data is never lost by a stray tap outside
       context: c,
       builder: (dc) => StatefulBuilder(
         builder: (dc, set) => AlertDialog(
@@ -263,6 +264,7 @@ class _UsersPageState extends State<UsersPage> with SingleTickerProviderStateMix
           onChanged: locked ? null : (v) => set(() => v == true ? perms.add(perm) : perms.remove(perm)),
         );
     await showDialog<void>(
+      barrierDismissible: false, // typed data is never lost by a stray tap outside
       context: c,
       builder: (dc) => StatefulBuilder(
         builder: (dc, set) => AlertDialog(

@@ -197,6 +197,7 @@ Future<void> editProduct(BuildContext c, Repo repo, {Product? product, String? p
   }
 
   await showDialog(
+    barrierDismissible: false, // typed data is never lost by a stray tap outside
     context: c,
     builder: (dc) => StatefulBuilder(builder: (dc, set) => AlertDialog(
       title: Text(p == null ? 'کالای جدید' : 'ویرایش کالا'),
@@ -463,6 +464,7 @@ Future<String?> askGroupName(BuildContext c, {String initial = '', String title 
 /// Add, rename and delete product groups. Deleting a group keeps its products.
 Future<void> showGroupsDialog(BuildContext c, Repo repo) async {
   await showDialog<void>(
+    barrierDismissible: false, // typed data is never lost by a stray tap outside
     context: c,
     builder: (dc) => RepoBuilder<List<ProductGroup>>(
       repo: repo,
@@ -517,6 +519,7 @@ Future<void> showPercentDialog(BuildContext context, Repo repo, {required List<P
   var target = 'both', scope = 'shown', round = 1;
   String? error;
   await showDialog<void>(
+    barrierDismissible: false, // typed data is never lost by a stray tap outside
     context: context,
     builder: (dc) => StatefulBuilder(
       builder: (dc, set) => AlertDialog(
@@ -596,6 +599,7 @@ Future<void> showRateDialog(BuildContext context, Repo repo) async {
   final rate = TextEditingController(text: repo.usdRate == 0 ? '' : inputNum(repo.usdRate));
   String? error;
   await showDialog<void>(
+    barrierDismissible: false, // typed data is never lost by a stray tap outside
     context: context,
     builder: (dc) => StatefulBuilder(
       builder: (dc, set) => AlertDialog(

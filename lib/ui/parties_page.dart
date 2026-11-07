@@ -82,6 +82,7 @@ Future<void> editParty(BuildContext c, Repo repo, [Party? p]) async {
   final opening = TextEditingController(text: p == null || p.opening == 0 ? '' : '${p.opening}');
   final key = GlobalKey<FormState>();
   await showDialog(
+    barrierDismissible: false, // typed data is never lost by a stray tap outside
     context: c,
     builder: (dc) => AlertDialog(
       title: Text(p == null ? 'شخص جدید' : 'ویرایش شخص'),

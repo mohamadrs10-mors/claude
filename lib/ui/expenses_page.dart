@@ -102,6 +102,7 @@ Future<void> editExpense(BuildContext context, Repo repo, {Expense? expense}) as
   final desc = TextEditingController(text: expense?.description);
   String? error;
   await showDialog<void>(
+    barrierDismissible: false, // typed data is never lost by a stray tap outside
     context: context,
     builder: (dc) => StatefulBuilder(
       builder: (dc, set) => AlertDialog(
@@ -323,6 +324,7 @@ Future<void> editRecurring(BuildContext context, Repo repo, {RecurringExpense? i
   var active = item?.active ?? true;
   String? error;
   await showDialog<void>(
+    barrierDismissible: false, // typed data is never lost by a stray tap outside
     context: context,
     builder: (dc) => StatefulBuilder(
       builder: (dc, set) => AlertDialog(

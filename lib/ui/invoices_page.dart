@@ -510,8 +510,21 @@ class _InvoiceEditPageState extends State<InvoiceEditPage> {
     setState(() {});
   }
 
+  /// Typed content that has not been saved yet: leaving by the back button asks first,
+  /// so a stray swipe or tap never throws a half-entered document away.
+  bool get _dirty => loaded && (lines.any((l) => l.title.text.trim().isNotEmpty || l.price.text.trim().isNotEmpty) || note.text.trim().isNotEmpty);
+
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => PopScope(
+        canPop: false, // decided when leaving: the typed content changes without a rebuild
+        onPopInvokedWithResult: (didPop, _) async {
+          if (didPop) return;
+          if ((!_dirty || await confirm(context, 'تغییرات ذخیره‌نشده از بین می‌رود. بدون ذخیره خارج می‌شوید؟')) && context.mounted) Navigator.pop(context);
+        },
+        child: _scaffold(context),
+      );
+
+  Widget _scaffold(BuildContext context) {
     if (!loaded) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     return Scaffold(
       appBar: AppBar(title: Text(widget.invoiceId == null ? 'فاکتور جدید' : 'ویرایش فاکتور')),

@@ -67,6 +67,7 @@ class AccountsPage extends StatelessWidget {
     var kind = a?.kind ?? 'cash';
     final key = GlobalKey<FormState>();
     await showDialog(
+      barrierDismissible: false, // typed data is never lost by a stray tap outside
       context: c,
       builder: (dc) => StatefulBuilder(
         builder: (dc, set) => AlertDialog(
@@ -127,6 +128,7 @@ class AccountsPage extends StatelessWidget {
     var kind = k?.kind ?? 'expense';
     final key = GlobalKey<FormState>();
     await showDialog(
+      barrierDismissible: false, // typed data is never lost by a stray tap outside
       context: c,
       builder: (dc) => StatefulBuilder(
         builder: (dc, set) => AlertDialog(

@@ -124,6 +124,7 @@ Future<void> editCheque(BuildContext context, Repo repo, {Cheque? cheque, String
   final key = GlobalKey<FormState>();
 
   await showDialog(
+    barrierDismissible: false, // typed data is never lost by a stray tap outside
     context: context,
     builder: (dc) => StatefulBuilder(
       builder: (dc, set) => AlertDialog(

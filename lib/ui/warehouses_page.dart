@@ -177,6 +177,7 @@ Future<void> _moveDialog(BuildContext context, Repo repo, List<Product> products
   final note = TextEditingController();
   String? error;
   await showDialog<void>(
+    barrierDismissible: false, // typed data is never lost by a stray tap outside
     context: context,
     builder: (dc) => StatefulBuilder(builder: (dc, setS) {
       final have = productId == null ? null : (stock[productId]?[from] ?? 0);
@@ -258,6 +259,7 @@ class _ListTab extends StatelessWidget {
     final note = TextEditingController(text: w?.note ?? '');
     String? error;
     await showDialog<void>(
+      barrierDismissible: false, // typed data is never lost by a stray tap outside
       context: context,
       builder: (dc) => StatefulBuilder(
         builder: (dc, setS) => AlertDialog(
